@@ -1,0 +1,24 @@
+CompileFlags:
+  # mold(NOTE: Error if clang-cl is not in path)
+  # - need pwsh(vs2022 clang-cl path)
+  #
+  # cmake -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -B build
+  # cmake --build ./build -j $Env:NUMBER_OF_PROCESSORS
+  CompilationDatabase: "build"
+  Add:
+    - -fdata-sections
+    - -ffunction-sections
+    - -fno-asynchronous-unwind-tables
+    - -fno-exceptions
+    - -fno-unwind-tables
+    - -std=c++20
+    - -Wall
+    - -Wextra
+    - -Wno-c++98-compat
+    - -Wno-missing-field-initializers
+    - -Wno-pre-c++17-compat
+
+    - -Wno-sign-compare
+    - -Wno-unused-function
+    - -Wno-unused-parameter
+  Compiler: c++

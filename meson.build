@@ -31,7 +31,11 @@ src = ['src/main.cpp',
       'src/gpu3d.cpp',
       'src/armtable.cpp',
       'src/emuthread.cpp',
-      'src/bios.cpp']
+      'src/bios.cpp',
+      
+      'src/firmware_dust.cpp',
+      'src/FreeBIOS.cpp'
+      ]
 
 ui = ['src/configwindow.ui',
       'src/debugwindow.ui']
@@ -62,7 +66,11 @@ headers = ['src/cartridge.hpp',
           'src/gpueng.hpp',
           'src/gpu3d.hpp',
           'src/emuthread.hpp',
-          'src/bios.hpp']
+          'src/bios.hpp',
+          
+          'src/firmware_dust.h',
+          'src/FreeBIOS.h'
+          ]
 
 moc_files = qt5.preprocess(ui_files: ui,
                           moc_headers: headers)
