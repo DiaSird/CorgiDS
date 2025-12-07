@@ -1,0 +1,176 @@
+<mxfile host="65bd71144e">
+    <diagram name="Phase Flow" id="phase_flow_diagram">
+        <mxGraphModel dx="1449" dy="648" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1600" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="phase7" value="Phase 7&#xa;Audio System&#xa;SPU &amp; ミキシング" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4B084;strokeColor=#C65911;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="710" y="307" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="title" value="Nintendo DS エミュレータ - 実装フェーズフロー (機能的関連)" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=18;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="400" y="20" width="600" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase0" value="Phase 0&#xa;FreeBIOS&#xa;✅ 完了" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B4D7A8;strokeColor=#548235;strokeWidth=3;fontSize=12;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="100" y="80" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow0_1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase0" target="phase1" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase1" value="Phase 1&#xa;Memory &amp; Constants&#xa;メモリマップ定義" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C5D9F1;strokeColor=#203864;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="300" y="80" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow1_2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase1" target="phase2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase2" value="Phase 2&#xa;CPU Core&#xa;レジスタ/実行エンジン" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C5D9F1;strokeColor=#203864;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="500" y="80" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow2_3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase2" target="phase3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase3" value="Phase 3&#xa;Memory/I/O Mgmt&#xa;I/Oレジスタ処理" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C5D9F1;strokeColor=#203864;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="700" y="80" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow3_4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase3" target="phase4" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="4" value="" style="edgeStyle=none;html=1;" edge="1" parent="1" source="phase4" target="phase5">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase4" value="Phase 4&#xa;GPU Infrastructure&#xa;フレームバッファ生成" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C5D9F1;strokeColor=#203864;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="900" y="80" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow4_5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase4" target="phase5" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase5" value="Phase 5&#xa;BIOS/ROM Loading&#xa;ゲーム起動可能化" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C5D9F1;strokeColor=#203864;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="1100" y="80" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow5_6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0066FF;strokeWidth=2;endArrow=classic;endFill=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" target="phase6" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="1170" y="190" as="sourcePoint"/>
+                        <mxPoint x="270" y="303" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow5_7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0066FF;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase5" target="phase7" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1170" y="190"/>
+                            <mxPoint x="780" y="190"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow5_8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0066FF;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase5" target="phase8" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1170" y="190"/>
+                            <mxPoint x="1070" y="190"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="phase6" value="Phase 6&#xa;UI / Threading&#xa;Qt &amp; マルチスレッド" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4B084;strokeColor=#C65911;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="200" y="250" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase8" value="Phase 8&#xa;Interrupt System&#xa;V-BLANK割り込み同期" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4B084;strokeColor=#C65911;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="1000" y="250" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow6_9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase6" target="phase9" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow7_9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase7" target="phase9" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow8_9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase8" target="phase9" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase9" value="Phase 9&lt;br&gt;Instruction Set (ARM9)&lt;br&gt;⭐ CRITICAL BOTTLENECK&lt;br&gt;ARM命令の実装完成" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FF6B6B;strokeColor=#C00000;strokeWidth=3;fontSize=12;fontStyle=1;fontColor=#FFFFFF" parent="1" vertex="1">
+                    <mxGeometry x="500" y="400" width="180" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow9_10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase9" target="phase10" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase10" value="Phase 10&#xa;ARM7 Implementation&#xa;補助プロセッサ" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C5D9F1;strokeColor=#203864;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="100" y="550" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow10_11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase10" target="phase11" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase11" value="Phase 11&#xa;3D Graphics&#xa;GPU 3D エンジン" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C5D9F1;strokeColor=#203864;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="300" y="550" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow11_12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase11" target="phase12" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase12" value="Phase 12&#xa;Save Data System&#xa;EEPROM/FLASH" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C5D9F1;strokeColor=#203864;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="500" y="550" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow12_13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase12" target="phase13" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase13" value="Phase 13&#xa;WiFi / Networking&#xa;ワイヤレス通信" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C5D9F1;strokeColor=#203864;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="700" y="550" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow13_14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;endArrow=classic;endFill=1" parent="1" source="phase13" target="phase14" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase14" value="Phase 14&#xa;Optimization &amp; Debugger&#xa;JIT &amp; デバッグUI" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E2EFDA;strokeColor=#70AD47;strokeWidth=2;fontSize=11;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="900" y="550" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend" value="依存関係の説明" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=13;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="50" y="700" width="150" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="note1" value="✅ 緑: 完了 (Phase 0)" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="740" width="200" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="note2" value="🔵 青: 基盤実装 (Phase 1-5, 10-13) - 順序あり" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="765" width="300" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="note3" value="🟠 橙: 並列実装可能 (Phase 6-8) - 依存なし" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="790" width="300" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="note4" value="🔴 赤: クリティカルパス (Phase 9⭐) - ボトルネック" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="815" width="350" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="note5" value="📊 矢印方向: 実装順序（上から下へ、左から右へ進む）" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="840" width="400" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="facts_title" value="🎯 重要なポイント" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=13;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="50" y="880" width="150" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="fact1" value="1. Phase 1-5は順序必須 - 各フェーズが前のフェーズに依存" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="915" width="450" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="fact2" value="2. Phase 6-8は並列実装可能 - UI、Audio、Interrupt は独立していて同時に進められる" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="940" width="550" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="fact3" value="3. Phase 9はクリティカルパス ⭐ - CPU命令セット完成なしでは以降が動作しない" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="965" width="550" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="fact4" value="4. Phase 10-14は順序必須 - 前のフェーズに依存 (Phase 9 完了後から開始可能)" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="990" width="550" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="fact5" value="5. 最小実装への経路: Phase 0→1→2→3→4→5→(6選択的)→(9必須)→10 で基本エミュレータ完成" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="1015" width="700" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="timeline_title" value="⏱️ 推定実装期間" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=13;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="50" y="1060" width="200" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="timeline1" value="• Phase 0-5: 5-6週 (順序必須)" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="1095" width="300" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="timeline2" value="• Phase 6-8: 4-5週 (並列可, Phase 5と並行)" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="1120" width="350" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="timeline3" value="• Phase 9: 6-8週 (クリティカル) ⭐" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="1145" width="300" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="timeline4" value="• Phase 10-14: 5-7週 (順序必須)" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10" parent="1" vertex="1">
+                    <mxGeometry x="50" y="1170" width="300" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="timeline5" value="合計: 約20-26週 (約5-6ヶ月) with 4-5人チーム" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=10;fontStyle=1;fontColor=#C00000" parent="1" vertex="1">
+                    <mxGeometry x="50" y="1195" width="400" height="25" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>
