@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -31,7 +31,10 @@ uint32_t byteswap_word(uint32_t word)
     return result;
 }
 
-NDS_Cart::NDS_Cart(Emulator* e) : e(e) {}
+NDS_Cart::NDS_Cart(Emulator* e) : e(e)
+{
+    power_on();
+}
 
 void NDS_Cart::key1_encrypt(uint32_t *data)
 {
@@ -134,6 +137,11 @@ void NDS_Cart::power_on()
     spi_params = 0;
 }
 
+bool NDS_Cart::game_loaded()
+{
+    return ROM != nullptr;
+}
+
 int NDS_Cart::load_database(string file_name)
 {
     save_database = nullptr;
@@ -195,7 +203,18 @@ int NDS_Cart::load_ROM(string file_name)
         int file_size = get_file_size(ROM_name + ".sav");
         if (file_size)
         {
+            static const int save_sizes[7] =
+                {512, 1024 * 8, 1024 * 64, 1024 * 256, 1024 * 512, 1024 * 1024, 1024 * 1024 * 8};
             save_file.read((char*)SPI_save, file_size);
+            //Round save size up to the closest option
+            for (int i = 0; i < 6; i++)
+            {
+                if (file_size > save_sizes[i] && file_size <= save_sizes[i + 1])
+                {
+                    file_size = save_sizes[i + 1];
+                    break;
+                }
+            }
             save_size = file_size;
             printf("Loaded save for %s successfully.\n", ROM_name.c_str());
             printf("Save size: %d\n", save_size);
@@ -354,7 +373,7 @@ void NDS_Cart::run(int cycles)
                 printf("\nCommand $%02X%02X%02X%02X%02X%02X%02X%02X to cartridge not recognized",
                        command_buffer[0], command_buffer[1], command_buffer[2], command_buffer[3],
                        command_buffer[4], command_buffer[5], command_buffer[6], command_buffer[7]);
-                //exit(3);
+                throw "[CART] Unknown command sent";
         }
         bytes_left -= 4;
         e->gamecart_DMA_request();
@@ -504,7 +523,6 @@ void NDS_Cart::set_AUXSPIDATA(uint8_t value)
                 break;
             default:
                 printf("\nUnrecognized AUXSPI cmd %d", value);
-                exit(1);
         }
     }
     else
@@ -567,7 +585,7 @@ void NDS_Cart::set_AUXSPIDATA(uint8_t value)
                         spi_addr++;
                     }
                 }*/
-                printf("\nWRITE_MEM: %d", value);
+                //printf("\nWRITE_MEM: %d", value);
                 break;
             case AUXSPI_COMMAND::READ_MEM:
                 switch (save_type)
@@ -603,7 +621,7 @@ void NDS_Cart::set_AUXSPIDATA(uint8_t value)
                         }
                         break;
                 }
-                printf("\nREAD_MEM: %d", value);
+                //printf("\nREAD_MEM: %d", value);
                 break;
             case AUXSPI_COMMAND::PAGE_WRITE:
                 if (save_type == 2)
@@ -617,7 +635,7 @@ void NDS_Cart::set_AUXSPIDATA(uint8_t value)
                     {
                         if (spi_write_enabled)
                         {
-                            printf("\nPage write to $%08X", spi_addr);
+                            //printf("\nPage write to $%08X", spi_addr);
                             dirty_save = true;
                             SPI_save[spi_addr & (save_size - 1)] = value;
                             spi_addr++;
@@ -651,14 +669,12 @@ void NDS_Cart::set_AUXSPIDATA(uint8_t value)
                         spi_addr = 0x100;
                 }
                 break;
-            default:
-                exit(1);
         }
     }
     spi_params++;
     if (!AUXSPICNT.hold_chipselect)
     {
-        printf("\nDeselected AUXSPI");
+        //printf("\nDeselected AUXSPI");
         spi_params = 0;
         spi_addr = 0;
         spi_cmd = AUXSPI_COMMAND::EMPTY;
@@ -694,7 +710,6 @@ void NDS_Cart::set_ROMCTRL(uint32_t value)
             cycles_left += ROMCTRL.key1_gap;
         if (cmd_encrypt_mode == 1)
         {
-            cycles_left += ROMCTRL.key1_gap;
             uint8_t data[8];
             for (int i = 0; i < 8; i++)
                 data[i] = command_buffer[7 - i];
@@ -731,10 +746,7 @@ void NDS_Cart::set_ROMCTRL(uint32_t value)
                 ROM_data_index |= (command_buffer[3] << 8);
                 ROM_data_index |= (command_buffer[4]);
                 if (bytes_left > 0x1000)
-                {
-                    printf("\nROM read bytes left > 0x1000");
-                    exit(1);
-                }
+                    throw "[CART] ROM read bytes left > 0x1000";
                 break;
             case 0xB8:
                 command_id = CART_COMMAND::GET_CHIP_ID;

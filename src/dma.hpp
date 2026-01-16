@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -51,9 +51,10 @@ class NDS_DMA
         void DMA_event(int index);
         void update_DMA(int index);
 
+        void activate_DMA(int index);
         void handle_event(SchedulerEvent& event);
 
-        bool is_active();
+        bool is_active(int cpu_id);
     
         uint32_t read_source(int index);
         uint16_t read_len(int index);
@@ -61,7 +62,7 @@ class NDS_DMA
     
         void write_source(int index, uint32_t source);
         void write_dest(int index, uint32_t dest);
-        void write_len(int index, uint16_t len);
+        void write_len(int index, uint32_t len);
         void write_CNT(int index, uint16_t CNT);
         void write_len_CNT(int index, uint32_t word);
     
@@ -70,9 +71,9 @@ class NDS_DMA
         void GXFIFO_request();
 };
 
-inline bool NDS_DMA::is_active()
+inline bool NDS_DMA::is_active(int cpu_id)
 {
-    return active_DMAs;
+    return active_DMAs & (0xF << (cpu_id * 4));
 }
 
 #endif /* dma_hpp */

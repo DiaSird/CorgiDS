@@ -1,9 +1,10 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
 
+#include "config.hpp"
 #include "emulator.hpp"
 
 uint32_t Emulator::arm9_read_word(uint32_t address)
@@ -12,6 +13,11 @@ uint32_t Emulator::arm9_read_word(uint32_t address)
         return *(uint32_t*)&arm9_bios[address - 0xFFFF0000];
     if (address >= MAIN_RAM_START && address < SHARED_WRAM_START)
         return *(uint32_t*)&main_RAM[address & MAIN_RAM_MASK];
+    if ((address >= IO_REGS_START && address < GBA_ROM_START) || address == 0x021F6404)
+    {
+        if (Config::test)
+            printf("\nRead32 $%08X", address);
+    }
     if (address >= SHARED_WRAM_START && address < IO_REGS_START)
     {
         switch (WRAMCNT)
@@ -92,6 +98,8 @@ uint32_t Emulator::arm9_read_word(uint32_t address)
             return SQRT_PARAM & 0xFFFFFFFF;
         case 0x040002BC:
             return SQRT_PARAM >> 32;
+        case 0x040004A4:
+            return 0; //POLYGON_ATTR is unreadable but games will spam the console without this
         case 0x04000600:
             return gpu.get_GXSTAT();
         case 0x04000604:
@@ -138,12 +146,17 @@ uint32_t Emulator::arm9_read_word(uint32_t address)
         return gpu.read_bga<uint32_t>(address);
     if (address >= VRAM_BGB_START && address < VRAM_OBJA_START)
         return gpu.read_bgb<uint32_t>(address);
+    if (address >= VRAM_OBJA_START && address < VRAM_OBJB_START)
+        return gpu.read_obja<uint32_t>(address);
+    if (address >= VRAM_OBJB_START && address < VRAM_LCDC_A)
+        return gpu.read_objb<uint32_t>(address);
     if (address >= VRAM_LCDC_A && address < VRAM_LCDC_END)
         return gpu.read_lcdc<uint32_t>(address);
     if (address >= OAM_START && address < GBA_ROM_START)
         return gpu.read_OAM<uint32_t>(address);
-    if (address >= GBA_ROM_START)
-        return 0xFFFFFFFF;
+    if (address >= GBA_ROM_START && address < GBA_RAM_START)
+        return slot2.read<uint32_t>(address);
+    //Ignore reads from NULL
     printf("\n(9) Unrecognized word read from $%08X", address);
     //exit(1);
     return 0;
@@ -156,6 +169,11 @@ uint16_t Emulator::arm9_read_halfword(uint32_t address)
     if (address >= MAIN_RAM_START && address < SHARED_WRAM_START)
     {
         return *(uint16_t*)&main_RAM[address & MAIN_RAM_MASK];
+    }
+    if (address >= IO_REGS_START && address < GBA_ROM_START)
+    {
+        if (Config::test)
+            printf("\nRead16 $%08X", address);
     }
     if (address >= SHARED_WRAM_START && address < IO_REGS_START)
     {
@@ -171,19 +189,6 @@ uint16_t Emulator::arm9_read_halfword(uint32_t address)
                 return 0;
         }
     }
-    if (address >= PALETTE_START && address < VRAM_BGA_START)
-    {
-        if ((address & 0x7FF) < 0x400)
-            return gpu.read_palette_A(address);
-        else
-            return gpu.read_palette_B(address);
-    }
-    if (address >= VRAM_OBJA_START && address < VRAM_OBJB_START)
-        return gpu.read_obja<uint16_t>(address);
-    if (address >= VRAM_OBJB_START && address < VRAM_LCDC_A)
-        return gpu.read_objb<uint16_t>(address);
-    if (address >= VRAM_LCDC_A && address < VRAM_LCDC_END)
-        return gpu.read_lcdc<uint16_t>(address);
     switch (address)
     {
         case 0x04000000:
@@ -252,6 +257,14 @@ uint16_t Emulator::arm9_read_halfword(uint32_t address)
             return EXMEMCNT;
         case 0x04000208:
             return int9_reg.IME;
+        case 0x04000210:
+            return int9_reg.IE & 0xFFFF;
+        case 0x04000212:
+            return int9_reg.IE >> 16;
+        case 0x04000214:
+            return int9_reg.IF & 0xFFFF;
+        case 0x04000216:
+            return int9_reg.IF >> 16;
         case 0x04000280:
             return DIVCNT;
         case 0x040002B0:
@@ -291,13 +304,25 @@ uint16_t Emulator::arm9_read_halfword(uint32_t address)
     }
     if (address >= 0x04000630 && address < 0x04000636)
         return gpu.read_vec_test(address);
+    if (address >= PALETTE_START && address < VRAM_BGA_START)
+    {
+        if ((address & 0x7FF) < 0x400)
+            return gpu.read_palette_A(address);
+        else
+            return gpu.read_palette_B(address);
+    }
     if (address >= VRAM_BGA_START && address < VRAM_BGB_START)
         return gpu.read_bga<uint16_t>(address);
     if (address >= VRAM_BGB_START && address < VRAM_OBJA_START)
         return gpu.read_bgb<uint16_t>(address);
-
-    if (address >= GBA_ROM_START)
-        return 0xFFFF;
+    if (address >= VRAM_OBJA_START && address < VRAM_OBJB_START)
+        return gpu.read_obja<uint16_t>(address);
+    if (address >= VRAM_OBJB_START && address < VRAM_LCDC_A)
+        return gpu.read_objb<uint16_t>(address);
+    if (address >= VRAM_LCDC_A && address < VRAM_LCDC_END)
+        return gpu.read_lcdc<uint16_t>(address);
+    if (address >= GBA_ROM_START && address < GBA_RAM_START)
+        return slot2.read<uint16_t>(address);
     printf("\n(9) Unrecognized halfword read from $%08X", address);
     return 0;
     //exit(1);
@@ -322,6 +347,11 @@ uint8_t Emulator::arm9_read_byte(uint32_t address)
             case 3: //Undefined memory
                 return 0;
         }
+    }
+    if (address >= IO_REGS_START && address < GBA_ROM_START)
+    {
+        if (Config::test)
+            printf("\nRead8 $%08X", address);
     }
     switch (address)
     {
@@ -360,12 +390,16 @@ uint8_t Emulator::arm9_read_byte(uint32_t address)
         return gpu.read_bga<uint8_t>(address);
     if (address >= VRAM_BGB_START && address < VRAM_OBJA_START)
         return gpu.read_bgb<uint8_t>(address);
+    if (address >= VRAM_OBJA_START && address < VRAM_OBJB_START)
+        return gpu.read_obja<uint8_t>(address);
+    if (address >= VRAM_OBJB_START && address < VRAM_LCDC_A)
+        return gpu.read_objb<uint8_t>(address);
     if (address >= VRAM_LCDC_A && address < OAM_START)
         return gpu.read_lcdc<uint8_t>(address);
     if (address >= OAM_START && address < GBA_ROM_START)
         return gpu.read_OAM<uint8_t>(address);
-    if (address >= GBA_ROM_START)
-        return 0xFF;
+    if (address >= GBA_ROM_START && address < GBA_RAM_START)
+        return slot2.read<uint8_t>(address);
     printf("\n(9) Unrecognized byte read from $%08X", address);
     //exit(1);
     return 0;
@@ -377,6 +411,11 @@ void Emulator::arm9_write_word(uint32_t address, uint32_t word)
     {
         *(uint32_t*)&main_RAM[address & MAIN_RAM_MASK] = word;
         return;
+    }
+    if (address >= IO_REGS_START && address < GBA_ROM_START)
+    {
+        if (Config::test)
+            printf("\nWrite32: $%08X $%08X", address, word);
     }
     if (address >= SHARED_WRAM_START && address < IO_REGS_START)
     {
@@ -475,7 +514,7 @@ void Emulator::arm9_write_word(uint32_t address, uint32_t word)
             gpu.set_BLDALPHA_A(word >> 16);
             return;
         case 0x04000054:
-            gpu.set_BLDY_A(word & 0xF);
+            gpu.set_BLDY_A(word & 0x1F);
             return;
         case 0x04000058:
         case 0x0400005C:
@@ -627,6 +666,7 @@ void Emulator::arm9_write_word(uint32_t address, uint32_t word)
             return;
         case 0x04000358:
             //TODO: FOG_COLOR
+            gpu.set_FOG_COLOR(word);
             return;
         case 0x04000600:
             gpu.set_GXSTAT(word);
@@ -708,7 +748,7 @@ void Emulator::arm9_write_word(uint32_t address, uint32_t word)
             gpu.set_BLDALPHA_B(word >> 16);
             return;
         case 0x04001054:
-            gpu.set_BLDY_B(word & 0xF);
+            gpu.set_BLDY_B(word & 0x1F);
             return;
         case 0x04001058:
         case 0x0400105C:
@@ -722,12 +762,18 @@ void Emulator::arm9_write_word(uint32_t address, uint32_t word)
         case 0x04001070:
             return;
     }
-    //TODO: EDGE_COLOR
     if (address >= 0x04000330 && address < 0x04000340)
+    {
+        gpu.set_EDGE_COLOR(address, word & 0xFFFF);
+        gpu.set_EDGE_COLOR(address + 2, word >> 16);
         return;
-    //TODO: FOG_TABLE
+    }
     if (address >= 0x04000360 && address < 0x04000380)
+    {
+        for (int i = 0; i < 4; i++)
+            gpu.set_FOG_TABLE(address + i, (word >> (i * 8)) & 0xFF);
         return;
+    }
     if (address >= 0x04000380 && address < 0x040003C0)
     {
         gpu.set_TOON_TABLE((address & 0x3F) >> 1, word & 0xFFFF);
@@ -806,6 +852,11 @@ void Emulator::arm9_write_word(uint32_t address, uint32_t word)
 
 void Emulator::arm9_write_halfword(uint32_t address, uint16_t halfword)
 {
+    if (address >= IO_REGS_START && address < GBA_ROM_START)
+    {
+        if (Config::test)
+            printf("\nWrite16: $%08X $%04X", address, halfword);
+    }
     if (address >= MAIN_RAM_START && address < SHARED_WRAM_START)
     {
         *(uint16_t*)&main_RAM[address & MAIN_RAM_MASK] = halfword;
@@ -963,7 +1014,7 @@ void Emulator::arm9_write_halfword(uint32_t address, uint16_t halfword)
             gpu.set_BLDALPHA_A(halfword);
             return;
         case 0x04000054:
-            gpu.set_BLDY_A(halfword);
+            gpu.set_BLDY_A(halfword & 0x1F);
             return;
         case 0x04000060:
             gpu.set_DISP3DCNT(halfword);
@@ -1039,6 +1090,14 @@ void Emulator::arm9_write_halfword(uint32_t address, uint16_t halfword)
         case 0x04000208:
             int9_reg.IME = halfword & 0x1;
             return;
+        case 0x04000210:
+            int9_reg.IE &= ~0xFFFF;
+            int9_reg.IE |= halfword;
+            return;
+        case 0x04000212:
+            int9_reg.IE &= ~0xFFFF0000;
+            int9_reg.IE |= halfword << 16;
+            return;
         case 0x04000248:
             gpu.set_VRAMCNT_H(halfword & 0xFF);
             gpu.set_VRAMCNT_I(halfword >> 8);
@@ -1067,7 +1126,7 @@ void Emulator::arm9_write_halfword(uint32_t address, uint16_t halfword)
             //TODO: CLRIMAGE_OFFSET
             return;
         case 0x0400035C:
-            //TODO: FOG_OFFSET
+            gpu.set_FOG_OFFSET(halfword);
             return;
         case 0x04001000:
             gpu.set_DISPCNT_B_lo(halfword);
@@ -1160,15 +1219,17 @@ void Emulator::arm9_write_halfword(uint32_t address, uint16_t halfword)
             gpu.set_BLDALPHA_B(halfword);
             return;
         case 0x04001054:
-            gpu.set_BLDY_B(halfword);
+            gpu.set_BLDY_B(halfword & 0x1F);
             return;
         case 0x0400106C:
             gpu.set_MASTER_BRIGHT_B(halfword);
             return;
     }
-    //TODO: EDGE_COLOR
     if (address >= 0x04000330 && address < 0x04000340)
+    {
+        gpu.set_EDGE_COLOR(address, halfword);
         return;
+    }
     if (address >= 0x04000380 && address < 0x040003C0)
     {
         gpu.set_TOON_TABLE((address & 0x3F) >> 1, halfword);
@@ -1188,6 +1249,11 @@ void Emulator::arm9_write_byte(uint32_t address, uint8_t byte)
     {
         main_RAM[address & MAIN_RAM_MASK] = byte;
         return;
+    }
+    if (address >= IO_REGS_START && address < GBA_ROM_START)
+    {
+        if (Config::test)
+            printf("\nWrite8: $%08X $%02X", address, byte);
     }
     if (address >= PALETTE_START && address < VRAM_BGA_START)
         return;
@@ -1250,7 +1316,7 @@ void Emulator::arm9_write_byte(uint32_t address, uint8_t byte)
             gpu.set_MOSAIC_B(byte);
             return;
         case 0x04001054:
-            gpu.set_BLDY_B(byte);
+            gpu.set_BLDY_B(byte & 0x1F);
             return;
     }
     if (address >= PALETTE_START && address < GBA_ROM_START)

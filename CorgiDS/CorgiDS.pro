@@ -1,4 +1,4 @@
-QT += core gui
+QT += core gui multimedia
 greaterThan(QT_MAJOR_VERSION, 4) : QT += widgets
 
 QMAKE_CFLAGS_RELEASE -= -O
@@ -22,13 +22,13 @@ SOURCES += \
     ../src/dma.cpp \
     ../src/firmware.cpp \
     ../src/instrthumb.cpp \
-    ../src/main.cpp \
+    ../src/qt/main.cpp \
     ../src/rtc.cpp \
     ../src/spi.cpp \
     ../src/timers.cpp \
     ../src/emulator.cpp \
-    ../src/emuwindow.cpp \
-    ../src/configwindow.cpp \
+    ../src/qt/emuwindow.cpp \
+    ../src/qt/configwindow.cpp \
     ../src/config.cpp \
     ../src/gpu.cpp \
     ../src/arm9rw.cpp \
@@ -37,13 +37,20 @@ SOURCES += \
     ../src/spu.cpp \
     ../src/wifi.cpp \
     ../src/touchscreen.cpp \
-    ../src/debugwindow.cpp \
+    ../src/qt/debugwindow.cpp \
     ../src/disasm_arm.cpp \
     ../src/gpueng.cpp \
     ../src/gpu3d.cpp \
     ../src/armtable.cpp \
-    ../src/emuthread.cpp \
-    ../src/bios.cpp
+    ../src/qt/emuthread.cpp \
+    ../src/bios.cpp \
+    ../src/qt/audiodevice.cpp \
+    ../src/disasm_thumb.cpp \
+    ../src/debugger.cpp \
+    ../src/slot2.cpp \
+    ../src/gba/gbarw.cpp \
+    ../src/gba/gbadma.cpp \
+    ../src/gba/gbagpu.cpp
 
 DEFINES += QT_DEPRECATED_WARNINGS
 DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000
@@ -62,21 +69,25 @@ HEADERS += \
     ../src/rtc.hpp \
     ../src/spi.hpp \
     ../src/timers.hpp \
-    ../src/emuwindow.hpp \
-    ../src/configwindow.hpp \
+    ../src/qt/emuwindow.hpp \
+    ../src/qt/configwindow.hpp \
     ../src/config.hpp \
     ../src/gpu.hpp \
     ../src/ipc.hpp \
     ../src/spu.hpp \
     ../src/wifi.hpp \
     ../src/touchscreen.hpp \
-    ../src/debugwindow.hpp \
+    ../src/qt/debugwindow.hpp \
     ../src/disassembler.hpp \
     ../src/gpueng.hpp \
     ../src/gpu3d.hpp \
-    ../src/emuthread.hpp \
-    ../src/bios.hpp
+    ../src/qt/emuthread.hpp \
+    ../src/bios.hpp \
+    ../src/qt/audiodevice.hpp \
+    ../src/debugger.hpp \
+    ../src/slot2.hpp \
+    ../src/gba/gbadma.hpp
 
 FORMS += \
-    ../src/configwindow.ui \
-    ../src/debugwindow.ui
+    ../src/qt/configwindow.ui \
+    ../src/qt/debugwindow.ui

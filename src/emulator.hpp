@@ -1,19 +1,22 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
 
 #ifndef emulator_hpp
 #define emulator_hpp
+#include "gba/gbadma.hpp"
 #include "bios.hpp"
 #include "cartridge.hpp"
 #include "cpu.hpp"
+#include "debugger.hpp"
 #include "dma.hpp"
 #include "gpu.hpp"
 #include "interrupts.hpp"
 #include "ipc.hpp"
 #include "rtc.hpp"
+#include "slot2.hpp"
 #include "spi.hpp"
 #include "spu.hpp"
 #include "timers.hpp"
@@ -69,20 +72,26 @@ class Emulator
         ARM_CPU arm7, arm9;
         BIOS bios;
         CP15 arm9_cp15;
+        Debugger debugger;
         NDS_Cart cart;
         NDS_DMA dma;
         GPU gpu;
         RealTimeClock rtc;
+        Slot2Device slot2;
         SPI_Bus spi;
         SPU spu;
         NDS_Timing timers;
         WiFi wifi;
+
+        bool gba_mode;
+        GBA_DMA gba_dma;
     
         uint8_t main_RAM[1024 * 1024 * 4]; //4 MB
         uint8_t shared_WRAM[1024 * 32]; //32 KB
         uint8_t arm7_WRAM[1024 * 64]; //64 KB
         uint8_t arm9_bios[BIOS9_SIZE];
         uint8_t arm7_bios[BIOS7_SIZE];
+        uint8_t gba_bios[BIOS_GBA_SIZE];
 
         //Scheduling
         uint64_t system_timestamp;
@@ -116,6 +125,8 @@ class Emulator
         uint64_t SQRT_PARAM;
         uint8_t POSTFLG7, POSTFLG9; //0x04000300
         uint32_t BIOSPROT; //0x04000308
+
+        uint16_t WAITCNT;
     
         bool hstep_even; //Debugging purposes
     
@@ -134,17 +145,26 @@ class Emulator
         Emulator();
         int init();
         int load_firmware();
+        void load_bios_gba(uint8_t* bios);
         void load_bios7(uint8_t* bios);
         void load_bios9(uint8_t* bios);
         void load_firmware(uint8_t* firmware);
+        void load_slot2(uint8_t* data, uint64_t size);
         void load_save_database(std::string name);
         int load_ROM(std::string ROM_name);
+
+        void mark_as_arm(uint32_t address);
+        void mark_as_thumb(uint32_t address);
 
         void power_on();
         void direct_boot();
         void debug();
         void run();
+        void run_gba();
         bool requesting_interrupt(int cpu_id);
+
+        bool is_gba();
+        void start_gba_mode(bool throw_exception);
 
         uint64_t get_timestamp();
 
@@ -156,7 +176,7 @@ class Emulator
 
         bool frame_complete();
         bool display_swapped();
-        bool DMA_active();
+        bool DMA_active(int cpu_id);
     
         void HBLANK_DMA_request();
         void gamecart_DMA_request();
@@ -183,17 +203,26 @@ class Emulator
         void arm7_write_word(uint32_t address, uint32_t word);
         void arm7_write_halfword(uint32_t address, uint16_t halfword);
         void arm7_write_byte(uint32_t address, uint8_t byte);
+
+        uint32_t gba_read_word(uint32_t address);
+        uint16_t gba_read_halfword(uint32_t address);
+        uint8_t gba_read_byte(uint32_t address);
+        void gba_write_word(uint32_t address, uint32_t word);
+        void gba_write_halfword(uint32_t address, uint16_t halfword);
+        void gba_write_byte(uint32_t address, uint8_t byte);
     
         void cart_copy_keybuffer(uint8_t* buffer);
         void cart_write_header(uint32_t address, uint16_t halfword);
     
         void request_interrupt7(INTERRUPT id);
         void request_interrupt9(INTERRUPT id);
+        void request_interrupt_gba(int id);
     
         bool arm7_has_cart_rights();
     
         ARM_CPU* get_arm9();
         ARM_CPU* get_arm7();
+        SPU* get_SPU();
 
         void button_up_pressed();
         void button_down_pressed();
@@ -249,9 +278,9 @@ bool inline Emulator::display_swapped()
     return gpu.display_swapped();
 }
 
-bool inline Emulator::DMA_active()
+bool inline Emulator::DMA_active(int cpu_id)
 {
-    return dma.is_active();
+    return dma.is_active(cpu_id);
 }
 
 void inline Emulator::button_up_pressed()

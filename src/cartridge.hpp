@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -103,6 +103,7 @@ class NDS_Cart
     public:
         NDS_Cart(Emulator* e);
         void power_on();
+        bool game_loaded();
         int load_database(std::string file_name);
         int load_ROM(std::string file_name);
         void save_check();

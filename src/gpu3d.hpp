@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -18,7 +18,7 @@ struct DISP3DCNT_REG
     bool alpha_blending;
     bool anti_aliasing;
     bool edge_marking;
-    bool fog_color_mode;
+    bool fog_alpha_only;
     bool fog_enable;
     int fog_depth_shift;
     bool color_buffer_underflow;
@@ -81,17 +81,19 @@ struct Vertex
 {
     int32_t coords[4];
     int32_t colors[3];
-
+    int32_t texcoords[2];
+    int32_t final_pos[2];
     int32_t final_colors[3];
     bool clipped;
-
-    int32_t texcoords[2];
 };
 
 struct Polygon
 {
-    uint16_t vert_index;
-    uint8_t vertices;
+    Vertex* vertices[10];
+    uint8_t vert_count;
+
+    int32_t final_z[10];
+    int32_t final_w[10];
 
     uint16_t top_y, bottom_y;
 
@@ -100,6 +102,8 @@ struct Polygon
     uint32_t palette_base;
 
     bool translucent;
+    bool shadow_mask;
+    bool shadow_poly;
 };
 
 struct GX_Command
@@ -112,11 +116,21 @@ class Emulator;
 
 class GPU;
 
+struct RenderAttr
+{
+    int trans_id;
+    bool translucent;
+    int opaque_id;
+    bool fog;
+    bool edge;
+};
+
 class GPU_3D
 {
     private:
         Emulator* e;
         GPU* gpu;
+        uint32_t framebuffer[PIXELS_PER_LINE];
         int cycles;
         DISP3DCNT_REG DISP3DCNT;
         POLYGON_ATTR_REG POLYGON_ATTR;
@@ -143,17 +157,41 @@ class GPU_3D
         uint32_t current_color;
         int16_t current_vertex[3];
         int16_t current_texcoords[2];
+        int16_t raw_texcoords[2];
 
         uint32_t z_buffer[SCANLINES][PIXELS_PER_LINE];
-        uint8_t trans_poly_ids[PIXELS_PER_LINE];
+
+        //Attribute buffer flags:
+        //0-4: trans poly id
+        //5: translucent
+        //6-11: opaque poly id
+        //12: fog
+        //13: edge
+        RenderAttr attr_buffer[PIXELS_PER_LINE];
+
+        uint16_t EDGE_COLOR[8];
+
+        uint32_t FOG_COLOR;
+        uint16_t FOG_OFFSET;
+        uint8_t FOG_TABLE[32];
+
+        //Stencil buffer has two separate places for odd/even scanlines?
+        bool stencil_buffer[PIXELS_PER_LINE * 2];
+        bool previous_shadow_mask;
 
         bool swap_buffers;
 
         static const uint8_t cmd_param_amounts[256];
         static const uint16_t cmd_cycle_amounts[256];
 
-        Vertex geo_vert[6188], rend_vert[6188];
-        Polygon geo_poly[2048], rend_poly[2048];
+        //Dynamically allocated vertex/polygon RAM banks
+        Vertex *vert_bank1, *vert_bank2;
+        Polygon *poly_bank1, *poly_bank2;
+
+        //Pointers to the RAM banks
+        Vertex* geo_vert, *rend_vert;
+        Polygon* geo_poly, *rend_poly;
+
         Polygon* last_poly_strip;
 
         Vertex vertex_list[10];
@@ -174,7 +212,7 @@ class GPU_3D
         MTX vector_stack[0x20];
         MTX clip_mtx;
         bool clip_dirty;
-        uint8_t modelview_sp;
+        uint8_t projection_sp, modelview_sp;
 
         uint16_t emission_color, ambient_color, diffuse_color, specular_color;
         uint16_t light_color[4];
@@ -207,12 +245,13 @@ class GPU_3D
         void clip_vertex(int plane, Vertex& v_list, Vertex& v_out, Vertex* v_in, int side, bool add_attributes);
         void add_vertex();
         void add_polygon();
-
+        void render_shadow_mask(Polygon* poly);
         void request_FIFO_DMA();
     public:
         GPU_3D(Emulator* e, GPU* gpu);
+        ~GPU_3D();
         void power_on();
-        void render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], uint8_t bg0_priority);
+        void render_scanline();
         void run(uint64_t cycles_to_run);
         void end_of_frame();
         void check_FIFO_DMA();
@@ -221,6 +260,7 @@ class GPU_3D
         void write_GXFIFO(uint32_t word);
         void write_FIFO_direct(uint32_t address, uint32_t word);
 
+        uint32_t* get_framebuffer();
         uint16_t get_DISP3DCNT();
         uint32_t get_GXSTAT();
         uint16_t get_vert_count();
@@ -233,6 +273,10 @@ class GPU_3D
 
         void set_CLEAR_COLOR(uint32_t word);
         void set_CLEAR_DEPTH(uint32_t word);
+        void set_EDGE_COLOR(uint32_t address, uint16_t halfword);
+        void set_FOG_COLOR(uint32_t word);
+        void set_FOG_OFFSET(uint16_t halfword);
+        void set_FOG_TABLE(uint32_t address, uint8_t byte);
         void set_MTX_MODE(uint32_t word);
         void MTX_PUSH();
         void MTX_POP(uint32_t word);

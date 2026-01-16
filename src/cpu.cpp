@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <sstream>
+#include <stdexcept>
 #include "config.hpp"
 #include "cpu.hpp"
 #include "cpuinstrs.hpp"
@@ -49,11 +50,11 @@ void PSR_Flags::set(uint32_t value)
 ARM_CPU::ARM_CPU(Emulator* e, int id) : e(e), cp15(nullptr), cpu_id(id)
 {
     //Fill waitstates with dummy values to prevent bugs
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 16; i++)
     {
-        for (int j = 0; j < 5; j++)
+        for (int j = 0; j < 4; j++)
             code_waitstates[i][j] = 1;
-        for (int j = 0; j < 6; j++)
+        for (int j = 0; j < 4; j++)
             code_waitstates[i][j] = 1;
     }
     //Initialize waitstates based upon GBATek's info
@@ -230,6 +231,18 @@ void ARM_CPU::direct_boot(uint32_t entry_point)
     }
 }
 
+void ARM_CPU::gba_boot(bool direct)
+{
+    if (direct)
+        jp(GBA_ROM_START, true);
+    else
+        jp(0, true);
+    regs[13] = 0x03007F00;
+    SP_svc = 0x03007FE0;
+    SP_irq = 0x03007FA0;
+    CPSR.mode = PSR_MODE::SYSTEM;
+}
+
 void ARM_CPU::set_cp15(CP15 *cp)
 {
     cp15 = cp;
@@ -240,14 +253,13 @@ void ARM_CPU::execute()
 {
     last_timestamp = timestamp;
     //TODO: replace these comparisons with a generic "halt state" variable
-    if (halted || e->DMA_active())
+    if (halted)
     {
-        //Wait until next event
-        timestamp = e->get_timestamp() << (1 - cpu_id);
+        timestamp += 4;
         if (e->requesting_interrupt(cpu_id))
         {
             halted = false;
-            if (!CPSR.IRQ_disabled && !e->DMA_active())
+            if (!CPSR.IRQ_disabled)
                 handle_IRQ();
         }
         return;
@@ -257,6 +269,8 @@ void ARM_CPU::execute()
     if (!CPSR.thumb_on)
     {
         current_instr = read_word(regs[15] - 4);
+        //if (Config::test)
+            //e->mark_as_arm(regs[15] - 4);
         add_s32_code(regs[15] - 4, 1);
         regs[15] += 4;
         Interpreter::arm_interpret(*this);
@@ -264,6 +278,8 @@ void ARM_CPU::execute()
     else
     {
         current_instr = read_halfword(regs[15] - 2);
+        //if (Config::test)
+            //e->mark_as_thumb(regs[15] - 4);
         add_s16_code(regs[15] - 2, 1);
         regs[15] += 2;
         Interpreter::thumb_interpret(*this);
@@ -274,6 +290,10 @@ void ARM_CPU::execute()
 
 void ARM_CPU::jp(uint32_t new_addr, bool change_thumb_state)
 {
+    /*if (new_addr == 0x02013218)
+        Config::test = true;
+    if (new_addr == 0x02006124)
+        Config::test = false;*/
     regs[15] = new_addr;
     
     //Simulate pipeline clear by adding extra cycles
@@ -291,7 +311,8 @@ void ARM_CPU::jp(uint32_t new_addr, bool change_thumb_state)
 
 void ARM_CPU::handle_UNDEFINED()
 {
-    printf("\nUNDEFINED bullshit!");
+    throw "[CPU] Undefined instruction";
+    /*printf("\nUNDEFINED bullshit!");
     uint32_t value = CPSR.get();
     SPSR[static_cast<int>(PSR_MODE::UNDEFINED)].set(value);
 
@@ -299,7 +320,7 @@ void ARM_CPU::handle_UNDEFINED()
     update_reg_mode(PSR_MODE::UNDEFINED);
     CPSR.mode = PSR_MODE::UNDEFINED;
     CPSR.IRQ_disabled = true;
-    jp(exception_base + 0x04, true);
+    jp(exception_base + 0x04, true);*/
 }
 
 void ARM_CPU::handle_IRQ()
@@ -346,8 +367,7 @@ void ARM_CPU::update_reg_mode(PSR_MODE new_mode)
                 swap(regs[14], LR_und);
                 break;
             default:
-                printf("\nUnrecognized mode");
-                exit(1);
+                throw "Unrecognized PSR mode";
         }
 
         switch (new_mode)
@@ -377,8 +397,7 @@ void ARM_CPU::update_reg_mode(PSR_MODE new_mode)
                 swap(regs[14], LR_und);
                 break;
             default:
-                printf("\nUnrecognized mode");
-                exit(1);
+                throw "Unrecognized PSR mode";
         }
     }
 }
@@ -391,7 +410,7 @@ void ARM_CPU::halt()
 void ARM_CPU::handle_SWI()
 {
     if (Config::hle_bios && e->hle_bios(cpu_id))
-        return; //If a HLE function is found, no need to go through the LLE stuff
+        return;
     uint32_t value = CPSR.get();
     SPSR[static_cast<int>(PSR_MODE::SUPERVISOR)].set(value);
     
@@ -657,7 +676,7 @@ bool ARM_CPU::check_condition(int condition)
             return false;
         default:
             printf("\nUnrecognized condition %d", condition);
-            exit(1);
+            throw "[CPU] Unrecognized condition code";
     }
 }
 
@@ -701,6 +720,22 @@ void ARM_CPU::add_s16_data(uint32_t address, int cycles)
     timestamp += (1 + data_waitstates[(address & 0x0F000000) >> 24][3]) * cycles;
 }
 
+void ARM_CPU::update_code_waitstate(uint8_t region, int n32_cycles, int s32_cycles, int n16_cycles, int s16_cycles)
+{
+    code_waitstates[region][0] = n32_cycles;
+    code_waitstates[region][1] = s32_cycles;
+    code_waitstates[region][2] = n16_cycles;
+    code_waitstates[region][3] = s16_cycles;
+}
+
+void ARM_CPU::update_data_waitstate(uint8_t region, int n32_cycles, int s32_cycles, int n16_cycles, int s16_cycles)
+{
+    data_waitstates[region][0] = n32_cycles;
+    data_waitstates[region][1] = s32_cycles;
+    data_waitstates[region][2] = n16_cycles;
+    data_waitstates[region][3] = s16_cycles;
+}
+
 void ARM_CPU::andd(int destination, int source, int operand, bool set_condition_codes)
 {
     uint32_t result = source & operand;
@@ -734,10 +769,7 @@ void ARM_CPU::add(uint32_t destination, uint32_t source, uint32_t operand, bool 
     if (destination == REG_PC)
     {
         if (set_condition_codes)
-        {
-            printf("Unsupported");
-            exit(1);
-        }
+            throw "[CPU] Op 'adds pc' unsupported";
         else
             jp(unsigned_result & 0xFFFFFFFF, true);
     }

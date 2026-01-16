@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -20,7 +20,7 @@ NDS_Timing::NDS_Timing(Emulator* e) : e(e)
 
 void NDS_Timing::overflow(int index)
 {
-    timers[index].counter = timers[index].reload_value;
+    timers[index].counter += timers[index].reload_value;
     
     if (timers[index].IRQ_on_overflow)
     {
@@ -87,16 +87,14 @@ void NDS_Timing::run_timer(int cycles, int index)
     if (!timers[index].count_up_timing)
     {
         timers[index].cycles_left -= cycles;
-        int old_timer = timers[index].counter;
 
         while (timers[index].cycles_left <= 0)
         {
             timers[index].counter++;
             timers[index].cycles_left += timer_clock_divs[timers[index].clock_div];
+            if (!timers[index].counter)
+                overflow(index);
         }
-
-        if (timers[index].counter < old_timer)
-            overflow(index);
     }
 }
 

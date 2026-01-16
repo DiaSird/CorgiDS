@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -11,6 +11,10 @@
 #include "gpu3d.hpp"
 #include "gpueng.hpp"
 #include "memconsts.h"
+
+//Defines for GBA mode
+#define GBA_BG VRAM_E
+#define GBA_OBJ VRAM_F
 
 struct DISPSTAT_REG
 {
@@ -90,8 +94,6 @@ class GPU
 
         uint64_t get_cycles() { return cycles; }
 
-        void draw_3D_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], uint8_t bg0_priority);
-
         void power_on();
         void run_3D(uint64_t cycles);
         void handle_event(SchedulerEvent& event);
@@ -130,7 +132,9 @@ class GPU
         void write_OAM(uint32_t address, uint16_t halfword);
 
         template <typename T> T read_ARM7(uint32_t address);
+        template <typename T> T read_gba(uint32_t address);
         template <typename T> void write_ARM7(uint32_t address, T value);
+        template <typename T> void write_gba(uint32_t address, T value);
 
         uint16_t* get_palette(bool engine_A);
         uint16_t* get_VRAM_block(int id);
@@ -150,6 +154,8 @@ class GPU
         uint16_t get_BGVOFS_A(int index);
         uint16_t get_BGHOFS_B(int index);
         uint16_t get_BGVOFS_B(int index);
+
+        uint32_t get_BG2X_A();
 
         uint16_t get_WIN0V_A();
         uint16_t get_WIN1V_A();
@@ -276,6 +282,10 @@ class GPU
 
         void set_CLEAR_COLOR(uint32_t word);
         void set_CLEAR_DEPTH(uint32_t word);
+        void set_EDGE_COLOR(uint32_t address, uint16_t halfword);
+        void set_FOG_COLOR(uint32_t word);
+        void set_FOG_OFFSET(uint16_t halfword);
+        void set_FOG_TABLE(uint32_t address, uint8_t byte);
         void set_MTX_MODE(uint32_t word);
         void MTX_PUSH();
         void MTX_POP(uint32_t word);
@@ -293,6 +303,9 @@ class GPU
         void SWAP_BUFFERS(uint32_t word);
         void VIEWPORT(uint32_t word);
         void set_GXSTAT(uint32_t word);
+
+        void gba_run(uint64_t cycles);
+        void gba_set_DISPCNT(uint16_t halfword);
 };
 
 template <typename T>
@@ -326,14 +339,14 @@ T GPU::read_bga(uint32_t address)
     }
     if (VRAMCNT_F.enabled && VRAMCNT_F.MST == 1)
     {
-        uint32_t f_offset = (VRAMCNT_F.offset & 0x1) * 0x4000 + (VRAMCNT_F.offset & 0x2) * 0x10000;
-        if (ADDR_IN_RANGE(VRAM_BGA_START, f_offset))
+        uint32_t f_offset = (VRAMCNT_F.offset & 0x1) * 0x4000 + (VRAMCNT_F.offset & 0x2) * 0x8000;
+        if (ADDR_IN_RANGE(VRAM_BGA_START + f_offset, VRAM_F_SIZE))
             reg |= *(T*)&VRAM_F[address & VRAM_F_MASK];
     }
     if (VRAMCNT_G.enabled && VRAMCNT_G.MST == 1)
     {
-        uint32_t g_offset = (VRAMCNT_G.offset & 0x1) * 0x4000 + (VRAMCNT_G.offset & 0x2) * 0x10000;
-        if (ADDR_IN_RANGE(VRAM_BGA_START, g_offset))
+        uint32_t g_offset = (VRAMCNT_G.offset & 0x1) * 0x4000 + (VRAMCNT_G.offset & 0x2) * 0x8000;
+        if (ADDR_IN_RANGE(VRAM_BGA_START + g_offset, VRAM_G_SIZE))
             reg |= *(T*)&VRAM_G[address & VRAM_G_MASK];
     }
     return reg;
@@ -372,11 +385,11 @@ T GPU::read_obja(uint32_t address)
         reg |= *(T*)&VRAM_B[address & VRAM_B_MASK];
     if (ADDR_IN_RANGE(VRAM_OBJA_START, VRAM_E_SIZE) && VRAMCNT_E.MST == 2)
         reg |= *(T*)&VRAM_E[address & VRAM_E_MASK];
-    uint32_t f_offset = (VRAMCNT_F.offset & 0x1) * 0x4000 + (VRAMCNT_F.offset & 0x2) * 0x10000;
-    if (ADDR_IN_RANGE(VRAM_OBJA_START, f_offset) && VRAMCNT_F.MST == 2)
+    uint32_t f_offset = (VRAMCNT_F.offset & 0x1) * 0x4000 + (VRAMCNT_F.offset & 0x2) * 0x8000;
+    if (ADDR_IN_RANGE(VRAM_OBJA_START + f_offset, VRAM_F_SIZE) && VRAMCNT_F.MST == 2)
         reg |= *(T*)&VRAM_F[address & VRAM_F_MASK];
-    uint32_t g_offset = (VRAMCNT_G.offset & 0x1) * 0x4000 + (VRAMCNT_G.offset & 0x2) * 0x10000;
-    if (ADDR_IN_RANGE(VRAM_OBJA_START, g_offset) && VRAMCNT_G.MST == 2)
+    uint32_t g_offset = (VRAMCNT_G.offset & 0x1) * 0x4000 + (VRAMCNT_G.offset & 0x2) * 0x8000;
+    if (ADDR_IN_RANGE(VRAM_OBJA_START + g_offset, VRAM_G_SIZE) && VRAMCNT_G.MST == 2)
         reg |= *(T*)&VRAM_G[address & VRAM_G_MASK];
     //printf("\n(OBJA READ) $%08X: $%04X", address, reg);
     return reg;
@@ -412,19 +425,19 @@ T GPU::read_teximage(uint32_t address)
     }
     if (VRAMCNT_B.enabled)
     {
-        uint32_t offset = VRAMCNT_B.offset * VRAM_A_SIZE;
+        uint32_t offset = VRAMCNT_B.offset * VRAM_B_SIZE;
         if (ADDR_IN_RANGE(offset, VRAM_B_SIZE) && VRAMCNT_B.MST == 3)
             reg |= *(T*)&VRAM_B[address & VRAM_B_MASK];
     }
     if (VRAMCNT_C.enabled)
     {
-        uint32_t offset = VRAMCNT_C.offset * VRAM_A_SIZE;
+        uint32_t offset = VRAMCNT_C.offset * VRAM_C_SIZE;
         if (ADDR_IN_RANGE(offset, VRAM_C_SIZE) && VRAMCNT_C.MST == 3)
             reg |= *(T*)&VRAM_C[address & VRAM_C_MASK];
     }
     if (VRAMCNT_D.enabled)
     {
-        uint32_t offset = VRAMCNT_D.offset * VRAM_A_SIZE;
+        uint32_t offset = VRAMCNT_D.offset * VRAM_D_SIZE;
         if (ADDR_IN_RANGE(offset, VRAM_D_SIZE) && VRAMCNT_D.MST == 3)
             reg |= *(T*)&VRAM_D[address & VRAM_D_MASK];
     }
@@ -525,15 +538,28 @@ T GPU::read_ARM7(uint32_t address)
     T reg = 0;
     if (VRAMCNT_C.enabled)
     {
-        if (ADDR_IN_RANGE(0x06000000 + VRAMCNT_C.offset * 0x20000, VRAM_C_SIZE) && VRAMCNT_C.MST == 2)
+        uint32_t offset = (VRAMCNT_C.offset & 0x1) * 0x20000;
+        if (ADDR_IN_RANGE(0x06000000 + offset, VRAM_C_SIZE) && VRAMCNT_C.MST == 2)
             reg |= *(T*)&VRAM_C[address & VRAM_C_MASK];
     }
     if (VRAMCNT_D.enabled)
     {
-        if (ADDR_IN_RANGE(0x06000000 + VRAMCNT_D.offset * 0x20000, VRAM_D_SIZE) && VRAMCNT_D.MST == 2)
+        uint32_t offset = (VRAMCNT_D.offset & 0x1) * 0x20000;
+        if (ADDR_IN_RANGE(0x06000000 + offset, VRAM_D_SIZE) && VRAMCNT_D.MST == 2)
             reg |= *(T*)&VRAM_D[address & VRAM_D_MASK];
     }
     return reg;
+}
+
+template <typename T>
+T GPU::read_gba(uint32_t address)
+{
+    //I don't know if the NDS uses separate VRAM for GBA mode or if it re-uses VRAM banks
+    //Might as well re-use the banks, since it makes no difference either way
+    if (address < 0x06010000)
+        return *(T*)&GBA_BG[address & 0xFFFF];
+    else
+        return *(T*)&GBA_OBJ[address & 0x7FFF];
 }
 
 template <typename T>
@@ -541,14 +567,25 @@ void GPU::write_ARM7(uint32_t address, T value)
 {
     if (VRAMCNT_C.enabled)
     {
-        if (ADDR_IN_RANGE(0x06000000 + VRAMCNT_C.offset * 0x20000, VRAM_C_SIZE) && VRAMCNT_C.MST == 2)
+        uint32_t offset = (VRAMCNT_C.offset & 0x1) * 0x20000;
+        if (ADDR_IN_RANGE(0x06000000 + offset, VRAM_C_SIZE) && VRAMCNT_C.MST == 2)
             *(T*)&VRAM_C[address & VRAM_C_MASK] = value;
     }
     if (VRAMCNT_D.enabled)
     {
-        if (ADDR_IN_RANGE(0x06000000 + VRAMCNT_D.offset * 0x20000, VRAM_D_SIZE) && VRAMCNT_D.MST == 2)
+        uint32_t offset = (VRAMCNT_D.offset & 0x1) * 0x20000;
+        if (ADDR_IN_RANGE(0x06000000 + offset, VRAM_D_SIZE) && VRAMCNT_D.MST == 2)
             *(T*)&VRAM_D[address & VRAM_D_MASK] = value;
     }
+}
+
+template <typename T>
+void GPU::write_gba(uint32_t address, T value)
+{
+    if (address < 0x06010000)
+        *(T*)&GBA_BG[address & 0xFFFF] = value;
+    else
+        *(T*)&GBA_OBJ[address & 0x7FFF] = value;
 }
 
 template <typename T>

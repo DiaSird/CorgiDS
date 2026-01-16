@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -10,6 +10,9 @@
 #include <cstring>
 #include "emulator.hpp"
 #include "gpu3d.hpp"
+
+//Macro that enables printf statements for geometry commands
+//#define GX_DEBUG
 
 using namespace std;
 
@@ -54,6 +57,7 @@ const uint16_t GPU_3D::cmd_cycle_amounts[256] =
 
 void MTX::set(const MTX &mtx)
 {
+    //printf("\nSize of MTX: %d", sizeof(MTX));
     memcpy(m, mtx.m, sizeof(MTX));
 }
 
@@ -69,7 +73,18 @@ const MTX GPU_3D::IDENTITY =
 
 GPU_3D::GPU_3D(Emulator* e, GPU* gpu) : e(e), gpu(gpu)
 {
+    vert_bank1 = new Vertex[6144];
+    vert_bank2 = new Vertex[6144];
+    poly_bank1 = new Polygon[2048];
+    poly_bank2 = new Polygon[2048];
+}
 
+GPU_3D::~GPU_3D()
+{
+    delete[] vert_bank1;
+    delete[] vert_bank2;
+    delete[] poly_bank1;
+    delete[] poly_bank2;
 }
 
 void GPU_3D::power_on()
@@ -91,8 +106,13 @@ void GPU_3D::power_on()
     rend_poly_count = 0;
     VTX_16_index = 0;
     modelview_sp = 0;
+    projection_sp = 0;
     vertex_list_count = 0;
     clip_dirty = true;
+    geo_vert = vert_bank1;
+    rend_vert = vert_bank2;
+    geo_poly = poly_bank1;
+    rend_poly = poly_bank2;
 
     cycles = 0;
     param_count = 0;
@@ -111,12 +131,16 @@ void GPU_3D::power_on()
     CLEAR_DEPTH = 0x7FFF;
 
     last_poly_strip = nullptr;
+    previous_shadow_mask = false;
+    memset(stencil_buffer, 0, sizeof(stencil_buffer));
 }
 
 //Applies perspective correction interpolation on a pixel with attributes u1, u2
 //TODO: apply the actual GPU algorithm, which takes shortcuts. This is the "normal" method
 int64_t GPU_3D::interpolate(uint64_t pixel, uint64_t pixel_range, int64_t u1, int64_t u2, int32_t w1, int32_t w2)
 {
+    if (!pixel_range)
+        return u1;
     int64_t bark = 0;
     bark = (pixel_range - pixel) * (u1 * w2);
     bark += pixel * (u2 * w1);
@@ -129,26 +153,37 @@ int64_t GPU_3D::interpolate(uint64_t pixel, uint64_t pixel_range, int64_t u1, in
 
 //((1-a)(u0*w1) + a(u1*w0)) / ((1-a)*w1 + a*w0)
 //finalZ = (((vertexZ * 0x4000) / vertexW) + 0x3FFF) * 0x200
-void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], uint8_t bg0_priority)
+void GPU_3D::render_scanline()
 {
     int line = gpu->get_VCOUNT();
     //Draw the rear-plane
     //X=(X*200h)+((X+1)/8000h)*1FFh
     uint32_t rear_z = (CLEAR_DEPTH * 0x200) + ((CLEAR_DEPTH + 1) / 0x8000) * 0x1FF;
-
+    bool rear_plane_fog = CLEAR_COLOR & (1 << 15);
+    int rear_a = (CLEAR_COLOR >> 16) & 0x1F;
+    uint32_t rear_color = rear_a << 24;
     for (int i = 0; i < PIXELS_PER_LINE; i++)
     {
+        framebuffer[i] = rear_color;
         z_buffer[line][i] = rear_z;
-        trans_poly_ids[i] = 0xFF;
+        attr_buffer[i].opaque_id = (CLEAR_COLOR >> 24) & 0x1F;
+        attr_buffer[i].fog = rear_plane_fog;
+        attr_buffer[i].translucent = false;
     }
     int y_coord = line * PIXELS_PER_LINE;
     for (int i = 0; i < rend_poly_count; i++)
     {
-        if (line < rend_poly[i].top_y || line > rend_poly[i].bottom_y)
+        Polygon* current_poly = &rend_poly[i];
+        if (line < current_poly->top_y || line > current_poly->bottom_y)
             continue;
 
-        if (rend_poly[i].attributes.polygon_mode == 3)
-            continue; //TODO: shadow polygons
+        if (current_poly->shadow_mask)
+        {
+            render_shadow_mask(current_poly);
+            continue;
+        }
+
+        previous_shadow_mask = false;
 
         int left_x = 512, right_x = -512;
         uint32_t left_r = 0, left_g = 0, left_b = 0,
@@ -157,33 +192,32 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
         int32_t left_w, right_w;
         int16_t left_s, left_t, right_s, right_t;
 
-        uint32_t vert_pointer = rend_poly[i].vert_index;
-
         //Figure out the leftmost/rightmost points on the polygon on this scanline
         //Using a variation of Bresenham's line algorithm
-        for (int vert = 0; vert < rend_poly[i].vertices; vert++)
+        for (int vert = 0; vert < current_poly->vert_count; vert++)
         {
-            int x1 = rend_vert[vert_pointer + vert].coords[0],
-                y1 = rend_vert[vert_pointer + vert].coords[1],
-                x2 = rend_vert[vert_pointer + ((vert + 1) % rend_poly[i].vertices)].coords[0],
-                y2 = rend_vert[vert_pointer + ((vert + 1) % rend_poly[i].vertices)].coords[1];
+            int vert2 = (vert + 1) % current_poly->vert_count;
+            int x1 = current_poly->vertices[vert]->final_pos[0],
+                y1 = current_poly->vertices[vert]->final_pos[1],
+                x2 = current_poly->vertices[vert2]->final_pos[0],
+                y2 = current_poly->vertices[vert2]->final_pos[1];
 
-            int16_t s1 = (int16_t)rend_vert[vert_pointer + vert].texcoords[0],
-                    s2 = (int16_t)rend_vert[vert_pointer + ((vert + 1) % rend_poly[i].vertices)].texcoords[0],
-                    t1 = (int16_t)rend_vert[vert_pointer + vert].texcoords[1],
-                    t2 = (int16_t)rend_vert[vert_pointer + ((vert + 1) % rend_poly[i].vertices)].texcoords[1];
+            int16_t s1 = (int16_t)current_poly->vertices[vert]->texcoords[0],
+                    s2 = (int16_t)current_poly->vertices[vert2]->texcoords[0],
+                    t1 = (int16_t)current_poly->vertices[vert]->texcoords[1],
+                    t2 = (int16_t)current_poly->vertices[vert2]->texcoords[1];
 
-            int32_t z1 = rend_vert[vert_pointer + vert].coords[2],
-                    z2 = rend_vert[vert_pointer + ((vert + 1) % rend_poly[i].vertices)].coords[2];
-            int32_t w1 = rend_vert[vert_pointer + vert].coords[3],
-                    w2 = rend_vert[vert_pointer + ((vert + 1) % rend_poly[i].vertices)].coords[3];
+            int32_t z1 = current_poly->final_z[vert],
+                    z2 = current_poly->final_z[vert2];
+            int32_t w1 = current_poly->final_w[vert],
+                    w2 = current_poly->final_w[vert2];
 
-            uint32_t r1 = rend_vert[vert_pointer + vert].final_colors[0],
-                     g1 = rend_vert[vert_pointer + vert].final_colors[1],
-                     b1 = rend_vert[vert_pointer + vert].final_colors[2],
-                     r2 = rend_vert[vert_pointer + ((vert + 1) % rend_poly[i].vertices)].final_colors[0],
-                     g2 = rend_vert[vert_pointer + ((vert + 1) % rend_poly[i].vertices)].final_colors[1],
-                     b2 = rend_vert[vert_pointer + ((vert + 1) % rend_poly[i].vertices)].final_colors[2];
+            uint32_t r1 = current_poly->vertices[vert]->final_colors[0],
+                     g1 = current_poly->vertices[vert]->final_colors[1],
+                     b1 = current_poly->vertices[vert]->final_colors[2],
+                     r2 = current_poly->vertices[vert2]->final_colors[0],
+                     g2 = current_poly->vertices[vert2]->final_colors[1],
+                     b2 = current_poly->vertices[vert2]->final_colors[2];
 
             //Transpose steep lines (lines with a positive slope greater than one)
             bool steep = abs(y2 - y1) > abs(x2 - x1);
@@ -261,7 +295,7 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
 
             if (left_pixel >= 0)
             {
-                uint64_t line_len = (x2 - x1) + 1;
+                uint64_t line_len = (x2 - x1);
                 uint64_t left_pos = left_pixel - x1;
                 left_r = interpolate(left_pos, line_len, r1, r2, w1, w2);
                 left_g = interpolate(left_pos, line_len, g1, g2, w1, w2);
@@ -274,7 +308,7 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
 
             if (right_pixel >= 0)
             {
-                int line_len = (x2 - x1) + 1;
+                int line_len = (x2 - x1);
                 int right_pos = right_pixel - x1;
                 right_r = interpolate(right_pos, line_len, r1, r2, w1, w2);
                 right_g = interpolate(right_pos, line_len, g1, g2, w1, w2);
@@ -284,7 +318,6 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
                 right_s = (int16_t)interpolate(right_pos, line_len, s1, s2, w1, w2);
                 right_t = (int16_t)interpolate(right_pos, line_len, t1, t2, w1, w2);
             }
-            //printf("\nLeft r: $%08X Right r: $%08X", left_r, right_r);
         }
 
         if (right_x >= PIXELS_PER_LINE)
@@ -292,10 +325,10 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
         if (left_x < 0)
             left_x = 0;
 
-        int line_len = right_x - left_x + 1;
+        int line_len = right_x - left_x;
 
         //Calculate texture stuff in advance
-        TEXIMAGE_PARAM_REG texparams = rend_poly[i].texparams;
+        TEXIMAGE_PARAM_REG texparams = current_poly->texparams;
         bool texture_mapping = DISP3DCNT.texture_mapping && texparams.format;
         int tex_width = 8 << texparams.s_size;
         int tex_height = 8 << texparams.t_size;
@@ -304,10 +337,15 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
         //Fill the polygon
         for (int x = left_x; x <= right_x; x++)
         {
+            //Check if stencil buffer is set
+            if (current_poly->shadow_poly && !stencil_buffer[x + (PIXELS_PER_LINE * (line & 0x1))])
+                continue;
+
             //Depth test
             int pix_pos = x - left_x;
             uint32_t pix_z = interpolate(pix_pos, line_len, left_z, right_z, left_w, right_w);
-            if (rend_poly[i].attributes.depth_test_equal)
+
+            if (current_poly->attributes.depth_test_equal)
             {
                 uint32_t low_z = z_buffer[line][x] - 0x200;
                 uint32_t high_z = z_buffer[line][x] + 0x200;
@@ -319,14 +357,16 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
                 if (pix_z > z_buffer[line][x])
                     continue;
             }
-            uint32_t final_color = 0xFF000000;
+            uint32_t final_color = 0;
             uint32_t vr = 0, vg = 0, vb = 0, va = 0;
             uint16_t tr = 0x3E, tg = 0x3E, tb = 0x3E, ta = 0x1F;
 
             //Handle wireframe drawing
-            if (rend_poly[i].attributes.alpha == 0)
+            if (current_poly->attributes.alpha == 0)
             {
                 if (x == left_x || x == right_x)
+                    va = 0x1F;
+                else if (line == current_poly->top_y || line == current_poly->bottom_y)
                     va = 0x1F;
                 else
                     continue;
@@ -334,29 +374,13 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
             else
             {
                 //Normal alpha rules
-                va = rend_poly[i].attributes.alpha;
+                va = current_poly->attributes.alpha;
+
             }
 
-            //printf("\nvr: $%08X vg: $%08X vb: $%08X", vr, vg, vb);
-
-            vr = interpolate(pix_pos, line_len, left_r, right_r, left_w, right_w) >> 4;
-            vg = interpolate(pix_pos, line_len, left_g, right_g, left_w, right_w) >> 4;
-            vb = interpolate(pix_pos, line_len, left_b, right_b, left_w, right_w) >> 4;
-
-            vr <<= 1;
-            vg <<= 1;
-            vb <<= 1;
-
-            vr += !(!vr);
-            vg += !(!vg);
-            vb += !(!vb);
-
-            /*if (vr)
-                vr++;
-            if (vg)
-                vg++;
-            if (vb)
-                vb++;*/
+            vr = interpolate(pix_pos, line_len, left_r, right_r, left_w, right_w) >> 3;
+            vg = interpolate(pix_pos, line_len, left_g, right_g, left_w, right_w) >> 3;
+            vb = interpolate(pix_pos, line_len, left_b, right_b, left_w, right_w) >> 3;
 
             uint32_t r, g, b;
             if (texture_mapping)
@@ -411,7 +435,7 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
                         if (color_index || !texparams.color0_transparent)
                         {
                             uint32_t pal_addr = color_index * 2;
-                            pal_addr += rend_poly[i].palette_base * 0x10;
+                            pal_addr += current_poly->palette_base * 0x10;
                             uint16_t pal_color = gpu->read_texpal<uint16_t>(pal_addr);
                             tr = (pal_color & 0x1F) << 1;
                             tg = ((pal_color >> 5) & 0x1F) << 1;
@@ -428,12 +452,12 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
                         texel_addr /= 4;
                         texel_addr += tex_VRAM_offset;
                         uint8_t data = gpu->read_teximage<uint8_t>(texel_addr);
-                        data = (data >> ((texel_addr & 0x3) * 2)) & 0x3;
+                        data = (data >> ((s & 0x3) * 2)) & 0x3;
 
                         if (data || !texparams.color0_transparent)
                         {
                             uint32_t pal_addr = data * 2;
-                            pal_addr += rend_poly[i].palette_base * 0x8;
+                            pal_addr += current_poly->palette_base * 0x8;
                             uint16_t pal_color = gpu->read_texpal<uint16_t>(pal_addr);
                             tr = (pal_color & 0x1F) << 1;
                             tg = ((pal_color >> 5) & 0x1F) << 1;
@@ -458,7 +482,7 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
                         if (data || !texparams.color0_transparent)
                         {
                             uint32_t pal_addr = data * 2;
-                            pal_addr += rend_poly[i].palette_base * 0x10;
+                            pal_addr += current_poly->palette_base * 0x10;
                             uint16_t pal_color = gpu->read_texpal<uint16_t>(pal_addr);
                             tr = (pal_color & 0x1F) << 1;
                             tg = ((pal_color >> 5) & 0x1F) << 1;
@@ -478,7 +502,7 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
                         if (data || !texparams.color0_transparent)
                         {
                             uint32_t pal_addr = data * 2;
-                            pal_addr += rend_poly[i].palette_base * 0x10;
+                            pal_addr += current_poly->palette_base * 0x10;
                             uint16_t pal_color = gpu->read_texpal<uint16_t>(pal_addr);
                             tr = (pal_color & 0x1F) << 1;
                             tg = ((pal_color >> 5) & 0x1F) << 1;
@@ -505,7 +529,7 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
                         uint16_t palette_data = gpu->read_teximage<uint16_t>(slot1_addr);
                         uint32_t palette_offset = (palette_data & 0x3FFF) << 2;
 
-                        uint32_t palette_base = rend_poly[i].palette_base * 0x10;
+                        uint32_t palette_base = current_poly->palette_base * 0x10;
 
                         uint16_t color = 0;
                         switch (data)
@@ -576,7 +600,7 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
                                 break;
                             default:
                                 printf("\nUnrecognized 4x4 texel data type %d", data);
-                                exit(1);
+                                throw "[3D] Unrecognized 4x4 texel data type";
                         }
 
                         tr = (color & 0x1F) << 1;
@@ -596,7 +620,7 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
                         if (color_index || !texparams.color0_transparent)
                         {
                             uint32_t pal_addr = color_index * 2;
-                            pal_addr += rend_poly[i].palette_base * 0x10;
+                            pal_addr += current_poly->palette_base * 0x10;
                             uint16_t pal_color = gpu->read_texpal<uint16_t>(pal_addr);
                             tr = (pal_color & 0x1F) << 1;
                             tg = ((pal_color >> 5) & 0x1F) << 1;
@@ -624,8 +648,7 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
                     }
                         break;
                     default:
-                        printf("\nUnrecognized texture format %d", rend_poly[i].texparams.format);
-                        exit(1);
+                        printf("\nUnrecognized texture format %d", current_poly->texparams.format);
                 }
             }
 
@@ -642,12 +665,13 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
 
             int alpha;
 
-            switch (rend_poly[i].attributes.polygon_mode)
+            switch (current_poly->attributes.polygon_mode)
             {
                 case 0:
-                    r = (((tr + 1) * (vr + 1) - 1) / 64) << 2;
-                    g = (((tg + 1) * (vg + 1) - 1) / 64) << 2;
-                    b = (((tb + 1) * (vb + 1) - 1) / 64) << 2;
+                case 3:
+                    r = (((tr + 1) * (vr + 1) - 1) / 64);
+                    g = (((tg + 1) * (vg + 1) - 1) / 64);
+                    b = (((tb + 1) * (vb + 1) - 1) / 64);
                     alpha = (((ta + 1) * (va + 1) - 1)) / 32;
                     break;
                 case 2:
@@ -671,46 +695,310 @@ void GPU_3D::render_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], 
                         if (vb)
                             vb++;
                     }
-                    r = (((tr + 1) * (vr + 1) - 1) / 64) << 2;
-                    g = (((tg + 1) * (vg + 1) - 1) / 64) << 2;
-                    b = (((tb + 1) * (vb + 1) - 1) / 64) << 2;
+                    r = (((tr + 1) * (vr + 1) - 1) / 64);
+                    g = (((tg + 1) * (vg + 1) - 1) / 64);
+                    b = (((tb + 1) * (vb + 1) - 1) / 64);
                     alpha = (((ta + 1) * (va + 1) - 1)) / 32;
                     break;
                 default:
-                    printf("\nUnrecognized polygon rendering mode %d", rend_poly[i].attributes.polygon_mode);
-                    exit(1);
+                    printf("\nUnrecognized polygon rendering mode %d", current_poly->attributes.polygon_mode);
+                    throw "[3D] Unrecognized polygon rendering mode";
             }
 
             if (!alpha)
                 continue;
 
-            if (!rend_poly[i].translucent || rend_poly[i].attributes.set_new_trans_depth)
+            if (!current_poly->translucent || current_poly->attributes.set_new_trans_depth)
                 z_buffer[line][x] = pix_z;
 
-            if (DISP3DCNT.alpha_blending && rend_poly[i].translucent)
+            if (current_poly->translucent)
             {
-                //printf("\nAlpha: $%02X", alpha);
-                //Don't draw translucent polygons over each other if they share the same ID
-                if (trans_poly_ids[x] == rend_poly[i].attributes.id)
-                    continue;
+                if (DISP3DCNT.alpha_blending)
+                {
+                    if (current_poly->shadow_poly)
+                    {
+                        if (attr_buffer[x].translucent)
+                        {
+                            if (attr_buffer[x].trans_id == current_poly->attributes.id)
+                                continue;
+                        }
+                        else
+                        {
+                            if (attr_buffer[x].opaque_id == current_poly->attributes.id)
+                                continue;
+                        }
+                    }
+                    else
+                    {
+                        if (attr_buffer[x].translucent && attr_buffer[x].trans_id == current_poly->attributes.id)
+                            continue;
+                    }
+                    int pa = (framebuffer[x] >> 24) & 0x1F;
+                    int pr = (framebuffer[x] >> 16) & 0x3F;
+                    int pg = (framebuffer[x] >> 8) & 0x3F;
+                    int pb = framebuffer[x] & 0x3F;
 
-                trans_poly_ids[x] = rend_poly[i].attributes.id;
+                    if (pa)
+                    {
+                        r = (((alpha + 1) * r) + (31 - alpha) * pr) / 32;
+                        g = (((alpha + 1) * g) + (31 - alpha) * pg) / 32;
+                        b = (((alpha + 1) * b) + (31 - alpha) * pb) / 32;
+                        alpha = max(alpha, pa);
+                    }
+                }
+                attr_buffer[x].translucent = true;
+                attr_buffer[x].trans_id = current_poly->attributes.id;
+            }
+            else
+            {
+                attr_buffer[x].translucent = false;
+                attr_buffer[x].edge = false;
+                if (x == left_x || x == right_x || line == current_poly->top_y || line == current_poly->bottom_y)
+                {
+                    if (attr_buffer[x].opaque_id != current_poly->attributes.id)
+                        attr_buffer[x].edge = true;
+                }
 
-                int pr = (framebuffer[x + y_coord] >> 16) & 0xFF;
-                int pg = (framebuffer[x + y_coord] >> 8) & 0xFF;
-                int pb = framebuffer[x + y_coord] & 0xFF;
+                attr_buffer[x].opaque_id = current_poly->attributes.id;
 
-                r = (((alpha + 1) * r) + (31 - alpha) * pr) / 32;
-                g = (((alpha + 1) * g) + (31 - alpha) * pg) / 32;
-                b = (((alpha + 1) * b) + (31 - alpha) * pb) / 32;
             }
 
+            if (alpha > 0x1F)
+                alpha = 0x1F;
+
+            final_color |= alpha << 24;
             final_color |= r << 16;
             final_color |= g << 8;
             final_color |= b;
 
-            framebuffer[x + y_coord] = 0xFF000000 + final_color;
-            bg_priorities[x] = bg0_priority;
+            framebuffer[x] = 0x80000000 + final_color;
+            attr_buffer[x].fog = current_poly->attributes.fog_enable;
+        }
+    }
+    /*if (DISP3DCNT.edge_marking)
+    {
+        for (int i = 0; i < PIXELS_PER_LINE; i++)
+        {
+            if (attr_buffer[i].edge)
+            {
+                bool mark_edge = false;
+                if (i > 0)
+                {
+                    if (attr_buffer[i].opaque_id != attr_buffer[i - 1].opaque_id)
+                    {
+                        if (z_buffer[line][i] < z_buffer[line][i - 1])
+                            mark_edge = true;
+                    }
+                }
+                if (i < PIXELS_PER_LINE - 1)
+                {
+                    if (attr_buffer[i].opaque_id != attr_buffer[i + 1].opaque_id)
+                    {
+                        if (z_buffer[line][i] < z_buffer[line][i + 1])
+                            mark_edge = true;
+                    }
+                }
+                if (mark_edge)
+                {
+                    uint32_t new_color = 0x80000000;
+                    framebuffer[i] = new_color;
+                }
+            }
+        }
+    }*/
+    if (DISP3DCNT.fog_enable)
+    {
+        for (int i = 0; i < PIXELS_PER_LINE; i++)
+        {
+            if (attr_buffer[i].fog)
+            {
+                uint32_t z = z_buffer[line][i];
+                uint8_t density;
+                if (z < FOG_OFFSET)
+                {
+                    density = 0;
+                }
+                else
+                {
+                    //TODO: linearly interpolate density
+                    z -= FOG_OFFSET;
+                    int depth_boundary = (z >> 2);
+                    depth_boundary <<= DISP3DCNT.fog_depth_shift;
+                    depth_boundary >>= 17;
+                    if (depth_boundary > 31)
+                        depth_boundary = 31;
+                    density = FOG_TABLE[depth_boundary];
+                    density += (density == 0x7F); //0x7F gets treated as 0x80
+                }
+                if (!DISP3DCNT.fog_alpha_only)
+                {
+                    uint32_t new_color = 0x80000000;
+                    int fog_r = (FOG_COLOR & 0x1F) << 1;
+                    int fog_g = ((FOG_COLOR >> 5) & 0x1F) << 1;
+                    int fog_b = ((FOG_COLOR >> 10) & 0x1F) << 1;
+                    int fog_a = ((FOG_COLOR >> 16) & 0x1F);
+
+                    if (fog_r)
+                        fog_r++;
+                    if (fog_g)
+                        fog_g++;
+                    if (fog_b)
+                        fog_b++;
+                    int poly_r = (framebuffer[i] >> 16) & 0x3F;
+                    int poly_g = (framebuffer[i] >> 8) & 0x3F;
+                    int poly_b = framebuffer[i] & 0x3F;
+                    int poly_a = (framebuffer[i] >> 24) & 0x1F;
+
+                    new_color |= ((fog_a * density + poly_a * (128 - density)) / 128) << 24;
+                    new_color |= ((fog_r * density + poly_r * (128 - density)) / 128) << 16;
+                    new_color |= ((fog_g * density + poly_g * (128 - density)) / 128) << 8;
+                    new_color |= ((fog_b * density + poly_b * (128 - density)) / 128);
+                    framebuffer[i] = new_color;
+                }
+            }
+        }
+    }
+}
+
+void GPU_3D::render_shadow_mask(Polygon *current_poly)
+{
+    //This is a copy-paste of the normal render function
+    //TODO: Move all this interpolation shit to a new function
+    int line = gpu->get_VCOUNT();
+    int stencil_offset = PIXELS_PER_LINE * (line & 0x1);
+    if (!previous_shadow_mask)
+        memset(stencil_buffer + stencil_offset, 0, PIXELS_PER_LINE);
+
+    previous_shadow_mask = true;
+
+    int left_x = 512, right_x = -512;
+    uint32_t left_z, right_z;
+    int32_t left_w, right_w;
+
+    //Figure out the leftmost/rightmost points on the polygon on this scanline
+    //Using a variation of Bresenham's line algorithm
+    for (int vert = 0; vert < current_poly->vert_count; vert++)
+    {
+        int vert2 = (vert + 1) % current_poly->vert_count;
+        int x1 = current_poly->vertices[vert]->final_pos[0],
+            y1 = current_poly->vertices[vert]->final_pos[1],
+            x2 = current_poly->vertices[vert2]->final_pos[0],
+            y2 = current_poly->vertices[vert2]->final_pos[1];
+
+        int32_t z1 = current_poly->final_z[vert],
+                z2 = current_poly->final_z[vert2];
+        int32_t w1 = current_poly->final_w[vert],
+                w2 = current_poly->final_w[vert2];
+
+        //Transpose steep lines (lines with a positive slope greater than one)
+        bool steep = abs(y2 - y1) > abs(x2 - x1);
+        if (steep)
+        {
+            swap(x1, y1);
+            swap(x2, y2);
+        }
+
+        //Draw lines left-to-right
+        if (x1 > x2)
+        {
+            swap(x1, x2);
+            swap(y1, y2);
+            swap(z1, z2);
+            swap(w1, w2);
+        }
+
+        int dx = x2 - x1;
+        int dy = abs(y2 - y1);
+
+        int error = dx / 2;
+        int y_step = (y1 < y2) ? 1 : -1;
+
+        int y = y1;
+
+        int left_pixel = -1;
+        int right_pixel = -1;
+        for (int x = x1; x <= x2; x++)
+        {
+            if (steep)
+            {
+                if (line == x)
+                {
+                    if (y < left_x)
+                    {
+                        left_x = y;
+                        left_pixel = x;
+                    }
+                    if (y > right_x)
+                    {
+                        right_x = y;
+                        right_pixel = x;
+                    }
+                }
+            }
+            else
+            {
+                if (line == y)
+                {
+                    if (x < left_x)
+                    {
+                        left_x = x;
+                        left_pixel = x;
+                    }
+                    if (x > right_x)
+                    {
+                        right_x = x;
+                        right_pixel = x;
+                    }
+                }
+            }
+            error -= dy;
+            if (error < 0)
+            {
+                y += y_step;
+                error += dx;
+            }
+        }
+
+        if (left_pixel >= 0)
+        {
+            uint64_t line_len = (x2 - x1);
+            uint64_t left_pos = left_pixel - x1;
+            left_z = interpolate(left_pos, line_len, z1, z2, w1, w2);
+            left_w = (int32_t)interpolate(left_pos, line_len, w1, w2, w1, w2);
+        }
+
+        if (right_pixel >= 0)
+        {
+            int line_len = (x2 - x1);
+            int right_pos = right_pixel - x1;
+            right_z = interpolate(right_pos, line_len, z1, z2, w1, w2);
+            right_w = (int32_t)interpolate(right_pos, line_len, w1, w2, w1, w2);
+        }
+    }
+
+    if (right_x >= PIXELS_PER_LINE)
+        right_x = PIXELS_PER_LINE - 1;
+    if (left_x < 0)
+        left_x = 0;
+
+    int line_len = right_x - left_x;
+    for (int x = left_x; x <= right_x; x++)
+    {
+        //Stencil buffer is only set when the depth test fails
+        int pix_pos = x - left_x;
+        uint32_t pix_z = interpolate(pix_pos, line_len, left_z, right_z, left_w, right_w);
+
+        if (current_poly->attributes.depth_test_equal)
+        {
+            uint32_t low_z = z_buffer[line][x] - 0x200;
+            uint32_t high_z = z_buffer[line][x] + 0x200;
+            if (pix_z < low_z || pix_z > high_z)
+                stencil_buffer[x + stencil_offset] = true;
+        }
+        else
+        {
+            if (pix_z >= z_buffer[line][x])
+                stencil_buffer[x + stencil_offset] = true;
         }
     }
 }
@@ -795,6 +1083,7 @@ void GPU_3D::write_GXFIFO(uint32_t word)
 
 void GPU_3D::write_FIFO_direct(uint32_t address, uint32_t word)
 {
+    //printf("\nWrite FIFO direct: $%08X, $%08X", address, word);
     GX_Command cmd;
     cmd.command = (address >> 2) & 0x7F;
     cmd.param = word;
@@ -848,7 +1137,6 @@ GX_Command GPU_3D::read_command()
 
 void GPU_3D::write_command(GX_Command &cmd)
 {
-    //printf("\nWrite command: $%02X:%08X", cmd.command, cmd.param);
     if (!GXFIFO.size() && GXPIPE.size() < 4)
         GXPIPE.push(cmd);
     else
@@ -863,6 +1151,9 @@ void GPU_3D::write_command(GX_Command &cmd)
     }
 }
 
+#ifndef GX_DEBUG
+#define printf(fmt, ...)(0)
+#endif
 void GPU_3D::exec_command()
 {
     GX_Command cmd = read_command();
@@ -880,22 +1171,33 @@ void GPU_3D::exec_command()
             case 0x00:
                 break;
             case 0x10:
-                //printf("\nMTX_MODE: $%08X", cmd_params[0]);
+                printf("\nMTX_MODE: $%08X", cmd_params[0]);
                 MTX_MODE = cmd_params[0] & 0x3;
                 break;
             case 0x11:
+                printf("\nMTX_PUSH");
                 MTX_PUSH();
                 break;
             case 0x12:
-                //printf("\nMTX_POP: $%08X", cmd_params[0]);
+                printf("\nMTX_POP: $%08X", cmd_params[0]);
             {
-                int8_t offset = ((int8_t)(cmd_params[0] & 0x3F) << 2) >> 2;
+                int8_t offset = ((int8_t)((cmd_params[0] & 0x3F) << 2)) >> 2;
+                printf("\nOffset: %d", offset);
                 if (MTX_MODE != 3)
                     clip_dirty = true;
                 switch (MTX_MODE)
                 {
                     case 0:
-                        projection_mtx.set(projection_stack);
+                        if (projection_sp)
+                        {
+                            projection_mtx.set(projection_stack);
+                            projection_sp--;
+                        }
+                        else
+                        {
+                            printf("\nMTX_POP overflow!");
+                            GXSTAT.mtx_overflow = true;
+                        }
                         break;
                     case 1:
                     case 2:
@@ -917,12 +1219,11 @@ void GPU_3D::exec_command()
                         break;
                     default:
                         printf("\nUnrecognized MTX_MODE %d for MTX_POP", MTX_MODE);
-                        exit(1);
                 }
             }
                 break;
             case 0x13:
-                //printf("\nMTX_STORE");
+                printf("\nMTX_STORE");
             {
                 uint8_t offset = cmd_params[0] & 0x1F;
                 switch (MTX_MODE)
@@ -945,12 +1246,11 @@ void GPU_3D::exec_command()
                         break;
                     default:
                         printf("\nUnrecognized MTX_MODE %d for MTX_STORE", MTX_MODE);
-                        exit(1);
                 }
             }
                 break;
             case 0x14:
-                //printf("\nMTX_RESTORE $%02X", cmd_params[0] & 0xFF);
+                printf("\nMTX_RESTORE $%02X", cmd_params[0] & 0xFF);
                 if (MTX_MODE != 3)
                     clip_dirty = true;
                 switch (MTX_MODE)
@@ -976,16 +1276,16 @@ void GPU_3D::exec_command()
                         break;
                     default:
                         printf("\nUnrecognized MTX_MODE %d for MTX_RESTORE", MTX_MODE);
-                        exit(1);
                 }
                 break;
             case 0x15:
+                printf("\nMTX_IDENTITY");
                 if (MTX_MODE != 3)
                     clip_dirty = true;
                 MTX_IDENTITY();
                 break;
             case 0x16:
-                //printf("\nMTX_LOAD_4x4");
+                printf("\nMTX_LOAD_4x4");
             {
                 MTX* current_mtx = nullptr;
                 if (MTX_MODE != 3)
@@ -1003,7 +1303,7 @@ void GPU_3D::exec_command()
                         for (int i = 0; i < 4; i++)
                         {
                             for (int j = 0; j < 4; j++)
-                                vector_mtx.m[i][j] = cmd_params[(i * 4) + j];
+                                vector_mtx.m[i][j] = (int32_t)cmd_params[(i * 4) + j];
                         }
                         break;
                     case 3:
@@ -1011,17 +1311,16 @@ void GPU_3D::exec_command()
                         break;
                     default:
                         printf("\nUnrecognized MTX_MODE %d in MTX_LOAD_4x4", MTX_MODE);
-                        exit(1);
                 }
                 for (int i = 0; i < 4; i++)
                 {
                     for (int j = 0; j < 4; j++)
-                        current_mtx->m[i][j] = cmd_params[(i * 4) + j];
+                        current_mtx->m[i][j] = (int32_t)cmd_params[(i * 4) + j];
                 }
             }
                 break;
             case 0x17:
-                //printf("\nMTX_LOAD_4x3");
+                printf("\nMTX_LOAD_4x3");
                 if (MTX_MODE != 3)
                     clip_dirty = true;
             {
@@ -1036,42 +1335,49 @@ void GPU_3D::exec_command()
                         break;
                     case 2:
                         current_mtx = &modelview_mtx;
-                        vector_mtx.m[0][0] = cmd_params[0];
-                        vector_mtx.m[0][1] = cmd_params[1];
-                        vector_mtx.m[0][2] = cmd_params[2];
-                        vector_mtx.m[1][0] = cmd_params[3];
-                        vector_mtx.m[1][1] = cmd_params[4];
-                        vector_mtx.m[1][2] = cmd_params[5];
-                        vector_mtx.m[2][0] = cmd_params[6];
-                        vector_mtx.m[2][1] = cmd_params[7];
-                        vector_mtx.m[2][2] = cmd_params[8];
-                        vector_mtx.m[3][0] = cmd_params[9];
-                        vector_mtx.m[3][1] = cmd_params[10];
-                        vector_mtx.m[3][2] = cmd_params[11];
+                        vector_mtx.m[0][0] = (int32_t)cmd_params[0];
+                        vector_mtx.m[0][1] = (int32_t)cmd_params[1];
+                        vector_mtx.m[0][2] = (int32_t)cmd_params[2];
+                        vector_mtx.m[1][0] = (int32_t)cmd_params[3];
+                        vector_mtx.m[1][1] = (int32_t)cmd_params[4];
+                        vector_mtx.m[1][2] = (int32_t)cmd_params[5];
+                        vector_mtx.m[2][0] = (int32_t)cmd_params[6];
+                        vector_mtx.m[2][1] = (int32_t)cmd_params[7];
+                        vector_mtx.m[2][2] = (int32_t)cmd_params[8];
+                        vector_mtx.m[3][0] = (int32_t)cmd_params[9];
+                        vector_mtx.m[3][1] = (int32_t)cmd_params[10];
+                        vector_mtx.m[3][2] = (int32_t)cmd_params[11];
                         break;
                     case 3:
                         current_mtx = &texture_mtx;
                         break;
                     default:
                         printf("\nUnrecognized MTX_MODE %d for MTX_LOAD_4x3", MTX_MODE);
-                        exit(1);
                 }
-                current_mtx->m[0][0] = cmd_params[0];
-                current_mtx->m[0][1] = cmd_params[1];
-                current_mtx->m[0][2] = cmd_params[2];
-                current_mtx->m[1][0] = cmd_params[3];
-                current_mtx->m[1][1] = cmd_params[4];
-                current_mtx->m[1][2] = cmd_params[5];
-                current_mtx->m[2][0] = cmd_params[6];
-                current_mtx->m[2][1] = cmd_params[7];
-                current_mtx->m[2][2] = cmd_params[8];
-                current_mtx->m[3][0] = cmd_params[9];
-                current_mtx->m[3][1] = cmd_params[10];
-                current_mtx->m[3][2] = cmd_params[11];
+                current_mtx->m[0][0] = (int32_t)cmd_params[0];
+                current_mtx->m[0][1] = (int32_t)cmd_params[1];
+                current_mtx->m[0][2] = (int32_t)cmd_params[2];
+                current_mtx->m[1][0] = (int32_t)cmd_params[3];
+                current_mtx->m[1][1] = (int32_t)cmd_params[4];
+                current_mtx->m[1][2] = (int32_t)cmd_params[5];
+                current_mtx->m[2][0] = (int32_t)cmd_params[6];
+                current_mtx->m[2][1] = (int32_t)cmd_params[7];
+                current_mtx->m[2][2] = (int32_t)cmd_params[8];
+                current_mtx->m[3][0] = (int32_t)cmd_params[9];
+                current_mtx->m[3][1] = (int32_t)cmd_params[10];
+                current_mtx->m[3][2] = (int32_t)cmd_params[11];
+                if (geo_poly_count == 288 && MTX_MODE == 2)
+                {
+                    printf("\nLOAD_4X3 MODELVIEW");
+                    for (int i = 0; i < cmd_param_count; i++)
+                    {
+                        printf("$%08X ", cmd_params[i]);
+                    }
+                }
             }
                 break;
             case 0x18:
-                //printf("\nMTX_MULT_4x4");
+                printf("\nMTX_MULT_4x4");
             {
                 int cmd_pointer = 0;
                 for (int i = 0; i < 4; i++)
@@ -1083,7 +1389,7 @@ void GPU_3D::exec_command()
             }
                 break;
             case 0x19:
-                //printf("\nMTX_MULT_4x3");
+                printf("\nMTX_MULT_4x3");
             {
                 mult_params.m[0][0] = cmd_params[0];
                 mult_params.m[0][1] = cmd_params[1];
@@ -1101,7 +1407,7 @@ void GPU_3D::exec_command()
             }
                 break;
             case 0x1A:
-                //printf("\nMTX_MULT_3x3");
+                printf("\nMTX_MULT_3x3");
                 mult_params.m[0][0] = cmd_params[0];
                 mult_params.m[0][1] = cmd_params[1];
                 mult_params.m[0][2] = cmd_params[2];
@@ -1114,14 +1420,14 @@ void GPU_3D::exec_command()
                 MTX_MULT();
                 break;
             case 0x1B:
-                //printf("\nMTX_SCALE: $%08X $%08X $%08X", cmd_params[0], cmd_params[1], cmd_params[2]);
+                printf("\nMTX_SCALE: $%08X $%08X $%08X", cmd_params[0], cmd_params[1], cmd_params[2]);
                 mult_params.m[0][0] = cmd_params[0];
                 mult_params.m[1][1] = cmd_params[1];
                 mult_params.m[2][2] = cmd_params[2];
                 MTX_MULT(false);
                 break;
             case 0x1C:
-                //printf("\nMTX_TRANS");
+                printf("\nMTX_TRANS");
                 mult_params.m[3][0] = cmd_params[0];
                 mult_params.m[3][1] = cmd_params[1];
                 mult_params.m[3][2] = cmd_params[2];
@@ -1136,22 +1442,19 @@ void GPU_3D::exec_command()
                 break;
             case 0x22:
                 //printf("\nTEXCOORD: $%08X", cmd_params[0]);
-                current_texcoords[0] = cmd_params[0] & 0xFFFF;
-                current_texcoords[1] = cmd_params[0] >> 16;
+                raw_texcoords[0] = cmd_params[0] & 0xFFFF;
+                raw_texcoords[1] = cmd_params[0] >> 16;
                 if (TEXIMAGE_PARAM.transformation_mode == 1)
                 {
-                    int16_t texcoords[2];
-                    texcoords[0] = cmd_params[0] & 0xFFFF;
-                    texcoords[1] = cmd_params[0] >> 16;
-                    current_texcoords[0] = (texcoords[0] * texture_mtx.m[0][0] + texcoords[1] * texture_mtx.m[1][0]
+                    current_texcoords[0] = (raw_texcoords[0] * texture_mtx.m[0][0] + raw_texcoords[1] * texture_mtx.m[1][0]
                             + texture_mtx.m[2][0] + texture_mtx.m[3][0]) >> 12;
-                    current_texcoords[1] = (texcoords[0] * texture_mtx.m[0][1] + texcoords[1] * texture_mtx.m[1][1]
+                    current_texcoords[1] = (raw_texcoords[0] * texture_mtx.m[0][1] + raw_texcoords[1] * texture_mtx.m[1][1]
                             + texture_mtx.m[2][1] + texture_mtx.m[3][1]) >> 12;
                 }
                 else
                 {
-                    current_texcoords[0] = cmd_params[0] & 0xFFFF;
-                    current_texcoords[1] = cmd_params[0] >> 16;
+                    current_texcoords[0] = raw_texcoords[0];
+                    current_texcoords[1] = raw_texcoords[1];
                 }
                 break;
             case 0x23:
@@ -1200,24 +1503,24 @@ void GPU_3D::exec_command()
                 set_TEXIMAGE_PARAM(cmd_params[0]);
                 break;
             case 0x2B:
-                //printf("\nPLTT_BASE: $%08X", cmd_params[0]);
+                printf("\nPLTT_BASE: $%08X", cmd_params[0]);
                 PLTT_BASE = cmd_params[0] & 0x1FFF;
                 break;
             case 0x30:
-                //printf("\nDIF_AMB");
+                printf("\nDIF_AMB");
                 diffuse_color = cmd_params[0] & 0x7FFF;
                 ambient_color = (cmd_params[0] >> 16) & 0x7FFF;
                 if (cmd_params[0] & (1 << 15))
                     current_color = diffuse_color;
                 break;
             case 0x31:
-                //printf("\nSPE_EMI");
+                printf("\nSPE_EMI");
                 specular_color = cmd_params[0] & 0x7FFF;
                 emission_color = (cmd_params[0] >> 16) & 0x7FFF;
                 using_shine_table = cmd_params[0] & (1 << 15);
                 break;
             case 0x32:
-                //printf("\nLIGHT_VECTOR");
+                printf("\nLIGHT_VECTOR");
             {
                 int16_t light_vector[3];
                 light_vector[0] = (int16_t)((cmd_params[0] & 0x3FF) << 6) >> 6;
@@ -1236,11 +1539,11 @@ void GPU_3D::exec_command()
             }
                 break;
             case 0x33:
-                //printf("\nLIGHT_COLOR: $%08X", cmd_params[0]);
+                printf("\nLIGHT_COLOR: $%08X", cmd_params[0]);
                 light_color[cmd_params[0] >> 30] = cmd_params[0] & 0x7FFF;
                 break;
             case 0x34:
-                //printf("\nSHININESS");
+                printf("\nSHININESS");
                 for (int i = 0; i < 32; i++)
                 {
                     int index = i * 4;
@@ -1256,29 +1559,36 @@ void GPU_3D::exec_command()
                 current_poly_attr = POLYGON_ATTR;
                 consecutive_polygons = 0;
                 vertex_list_count = 0;
+                last_poly_strip = nullptr;
                 break;
             case 0x41:
                 //printf("\nEND_VTXS");
                 break;
             case 0x50:
+                printf("\nSWAP_BUFFERS");
                 SWAP_BUFFERS(cmd_params[0]);
                 break;
             case 0x60:
                 VIEWPORT(cmd_params[0]);
                 break;
             case 0x70:
+                printf("\nBOX_TEST");
                 BOX_TEST();
                 break;
             case 0x72:
+                printf("\nVEC_TEST");
                 VEC_TEST();
                 break;
             default:
                 printf("\nUnrecognized GXFIFO command $%02X", cmd.command);
-                //exit(1);
+                throw "[3D] Unrecognized GXFIFO command";
         }
         cmd_param_count = 0;
     }
 }
+#ifndef GX_DEBUG
+#undef printf
+#endif
 
 void GPU_3D::add_mult_param(uint32_t word)
 {
@@ -1392,10 +1702,7 @@ void GPU_3D::clip_vertex(int plane, Vertex &v_list, Vertex &v_out, Vertex *v_in,
     int32_t factor_den = factor_num - (v_out.coords[3] - (side * v_out.coords[plane]));
 
     if (factor_den == 0)
-    {
-        printf("\nError: factor_den equals zero!");
-        exit(1);
-    }
+        throw "[3D] factor_den equals zero";
 
 #define INTERPOLATE(var) v_list.var = (v_in->var + ((v_out.var - v_in->var) * factor_num) / factor_den);
 
@@ -1422,10 +1729,7 @@ void GPU_3D::clip_vertex(int plane, Vertex &v_list, Vertex &v_out, Vertex *v_in,
 void GPU_3D::add_polygon()
 {
     if (vertex_list_count < 3 || vertex_list_count > 4)
-    {
-        printf("\nError: add_polygon called with invalid vertex_list_count");
-        exit(1);
-    }
+        throw "[3D] add_polygon called with invalid vertex_list_count";
     //Cull front/back face polygons
     int64_t normal_x, normal_y, normal_z;
 
@@ -1454,34 +1758,33 @@ void GPU_3D::add_polygon()
 
     bool front_view = dot < 0;
 
-    if (!front_view)
-    {
-        if (!current_poly_attr.render_back)
-            return;
-    }
-    else
+    if (front_view)
     {
         if (!current_poly_attr.render_front)
+        {
+            last_poly_strip = nullptr;
             return;
+        }
     }
-    if (geo_poly_count >= 2048)
+    else if (dot > 0)
     {
-        //geo_poly_count++;
-        DISP3DCNT.RAM_overflow = true;
-        return;
+        if (!current_poly_attr.render_back)
+        {
+            last_poly_strip = nullptr;
+            return;
+        }
     }
 
-    //Clip the fuck out of that polygon
     int clip_start = 0;
     int clipped_count = vertex_list_count;
     Vertex clipped_list[10];
-    Vertex reused_list[2];
+    Vertex* reused_list[2];
 
+    int last_poly_verts = 0;
     //Attempt to attach vertices from last strip polygon to new one, if possible
     if (POLYGON_TYPE >= 2 && last_poly_strip)
     {
         int v0, v1;
-        int vertices;
         if (POLYGON_TYPE == 2)
         {
             if (consecutive_polygons & 0x1)
@@ -1494,119 +1797,186 @@ void GPU_3D::add_polygon()
                 v0 = 0;
                 v1 = 2;
             }
-            vertices = 3;
+            last_poly_verts = 3;
         }
         else
         {
             v0 = 3;
             v1 = 2;
 
-            vertices = 4;
+            last_poly_verts = 4;
         }
 
-        int v = last_poly_strip->vert_index;
-
-        if (last_poly_strip->vertices == vertices &&
-            !geo_vert[v + v0].clipped &&
-            !geo_vert[v + v1].clipped)
+        if (last_poly_strip->vert_count == last_poly_verts &&
+            !last_poly_strip->vertices[v0]->clipped &&
+            !last_poly_strip->vertices[v1]->clipped)
         {
-            /*reused_list[0] = geo_vert[v + v0];
-            reused_list[1] = geo_vert[v + v1];
-            clipped_list[0] = geo_vert[v + v0];
-            clipped_list[1] = geo_vert[v + v1];
-            clip_start = 2;*/
+            reused_list[0] = last_poly_strip->vertices[v0];
+            reused_list[1] = last_poly_strip->vertices[v1];
+            clipped_list[0] = *reused_list[0];
+            clipped_list[1] = *reused_list[1];
+            clip_start = 2;
         }
     }
 
     for (int i = clip_start; i < clipped_count; i++)
         clipped_list[i] = vertex_list[i];
 
+    //Clip the fuck out of that polygon
     clipped_count = clip(clipped_list, clipped_count, clip_start, true);
     if (!clipped_count)
+    {
+        last_poly_strip = nullptr;
         return;
+    }
+
+    if (geo_poly_count >= 2048 || geo_vert_count + clipped_count >= 6144)
+    {
+        printf("\nPolygon/vertex RAM overflow!");
+        //geo_poly_count++;
+        last_poly_strip = nullptr;
+        DISP3DCNT.RAM_overflow = true;
+        return;
+    }
 
     //Time to make a polygon!
-    //Also normalize w
-
-    int w_len = 0;
-    for (int i = 0; i < clipped_count; i++)
+    Polygon* poly = &geo_poly[geo_poly_count];
+    poly->top_y = 1024;
+    poly->bottom_y = 0;
+    poly->vert_count = 0;
+    if (last_poly_strip && clip_start > 0)
     {
-        while ((clipped_list[i].coords[3] >> w_len) && w_len < 32)
-            w_len += 4;
+        if (clipped_count == last_poly_verts)
+        {
+            poly->vertices[0] = reused_list[0];
+            poly->vertices[1] = reused_list[1];
+        }
+        else
+        {
+            Vertex v0 = *reused_list[0];
+            Vertex v1 = *reused_list[1];
+
+            geo_vert[geo_vert_count] = v0;
+            poly->vertices[0] = &geo_vert[geo_vert_count];
+            geo_vert[geo_vert_count + 1] = v1;
+            poly->vertices[1] = &geo_vert[geo_vert_count + 1];
+            geo_vert_count += 2;
+        }
+        poly->vert_count += 2;
     }
-    for (int i = 0; i < clipped_count; i++)
+    for (int i = clip_start; i < clipped_count; i++)
     {
-        int v = i + geo_vert_count;
-        if (v >= 6188)
+        Vertex* v = &geo_vert[geo_vert_count];
+        *v = clipped_list[i];
+        poly->vertices[i] = v;
+        poly->vert_count++;
+        geo_vert_count++;
+
+        //Viewport transformation
+        int64_t xx = v->coords[0], yy = v->coords[1], ww = v->coords[3];
+        int32_t final_x, final_y;
+
+        if (ww == 0)
         {
-            printf("\nVertex count exceeded!");
-            DISP3DCNT.RAM_overflow = true;
-            return;
-        }
-        geo_vert[v] = clipped_list[i];
-
-        //Convert z values
-        //finalZ = (((vertexZ * 0x4000) / vertexW) + 0x3FFF) * 0x200
-        int32_t z = geo_vert[v].coords[2], w = geo_vert[v].coords[3];
-        if (w)
-            geo_vert[v].coords[2] = ((((int64_t)z * 0x4000) / w) + 0x3FFF) * 0x200;
-        else
-            geo_vert[v].coords[2] = 0x7FFE00;
-
-        if (geo_vert[v].coords[2] < 0)
-            geo_vert[v].coords[2] = 0;
-        if (geo_vert[v].coords[2] > 0xFFFFFF)
-            geo_vert[v].coords[2] = 0xFFFFFF;
-
-        if (geo_vert[v].coords[2] == 0xFFFFFF)
-            printf("\nPoly%d max z!", geo_poly_count);
-
-        /*if (w_len < 16)
-        {
-            geo_vert[v].coords[3] >>= (16 - w_len);
-            geo_vert[v].coords[3] <<= (16 - w_len);
+            final_x = 0;
+            final_y = 0;
+            printf("\npoly%d ww equals 0??", i);
         }
         else
         {
-            geo_vert[v].coords[3] >>= (w_len - 16);
-            geo_vert[v].coords[3] <<= (w_len - 16);
-        }*/
+            int width = (viewport.x2 - viewport.x1 + 1) & 0x1FF;
+            int height = (viewport.y1 - viewport.y2 + 1) & 0xFF;
+            int64_t screen_x = (((xx + ww) * width) / (ww << 1)) + viewport.x1;
+            int64_t screen_y = (((-yy + ww) * height) / (ww << 1)) + viewport.y2;
+
+            final_x = screen_x & 0x1FF;
+            final_y = screen_y & 0xFF;
+        }
+
+        v->final_pos[0] = final_x;
+        v->final_pos[1] = final_y;
 
         for (int c = 0; c < 3; c++)
         {
-            geo_vert[v].final_colors[c] = geo_vert[v].colors[c] >> 12;
-            if (geo_vert[v].colors[c])
+            v->final_colors[c] = v->colors[c] >> 12;
+            if (v->final_colors[c])
             {
-                geo_vert[v].final_colors[c] <<= 4;
-                geo_vert[v].final_colors[c] += 0xF;
+                v->final_colors[c] <<= 4;
+                v->final_colors[c] += 0xF;
             }
         }
     }
-    geo_poly[geo_poly_count].vertices = clipped_count;
-    geo_poly[geo_poly_count].vert_index = geo_vert_count;
-    geo_poly[geo_poly_count].attributes = current_poly_attr;
-    geo_poly[geo_poly_count].texparams = TEXIMAGE_PARAM;
-    geo_poly[geo_poly_count].palette_base = PLTT_BASE;
+
+    int w_size = 0;
+    for (int i = 0; i < clipped_count; i++)
+    {
+        int y = poly->vertices[i]->final_pos[1];
+        if (y < poly->top_y)
+            poly->top_y = y;
+        if (y > poly->bottom_y)
+            poly->bottom_y = y;
+
+        uint32_t w = (uint32_t)poly->vertices[i]->coords[3];
+        while ((w >> w_size) && (w_size < 32))
+            w_size += 4;
+    }
+    for (int i = 0; i < clipped_count; i++)
+    {
+        Vertex* v = poly->vertices[i];
+        int32_t w = v->coords[3], normal_w;
+
+        //W is brought as close as possible to 16-bit using 4-bit shifts
+        if (w_size < 16)
+        {
+            w <<= 16 - w_size;
+            normal_w = w >> (16 - w_size);
+        }
+        else
+        {
+            w >>= w_size - 16;
+            normal_w = w << (w_size - 16);
+        }
+
+        //Convert z values
+        //finalZ = (((vertexZ * 0x4000) / vertexW) + 0x3FFF) * 0x200
+        int32_t z;
+        if (flush_mode & 0x2) //w-buffer
+            z = v->coords[3];
+        else if (w)
+            z = ((((int64_t)v->coords[2] * 0x4000) / v->coords[3]) + 0x3FFF) * 0x200;
+        else
+            z = 0x7FFE00;
+
+        if (z < 0)
+            z = 0;
+        if (z > 0xFFFFFF)
+            z = 0xFFFFFF;
+
+        poly->final_z[i] = z;
+        poly->final_w[i] = w;
+    }
+    poly->attributes = current_poly_attr;
+    poly->texparams = TEXIMAGE_PARAM;
+    poly->palette_base = PLTT_BASE;
     if ((current_poly_attr.alpha > 0 && current_poly_attr.alpha < 0x1F) ||
          TEXIMAGE_PARAM.format == 1 || TEXIMAGE_PARAM.format == 6)
-        geo_poly[geo_poly_count].translucent = true;
+        poly->translucent = true;
     else
-        geo_poly[geo_poly_count].translucent = false;
+        poly->translucent = false;
+
+    //Shadow masks have an ID of zero
+    //Actual shadows have a non-zero ID
+    poly->shadow_mask = (!current_poly_attr.id && current_poly_attr.polygon_mode == 3);
+    poly->shadow_poly = !poly->shadow_mask && current_poly_attr.polygon_mode == 3;
     geo_poly_count++;
-    geo_vert_count += clipped_count;
     if (POLYGON_TYPE >= 2)
-    {
-        vertex_list_count = 2;
-        last_poly_strip = &geo_poly[geo_poly_count - 1];
-    }
+        last_poly_strip = poly;
     else
         last_poly_strip = nullptr;
 }
 
 void GPU_3D::add_vertex()
 {
-    if (geo_vert_count >= 6188)
-        return;
     int64_t coords[4];
     coords[0] = (int64_t)(int16_t)current_vertex[0];
     coords[1] = (int64_t)(int16_t)current_vertex[1];
@@ -1628,20 +1998,20 @@ void GPU_3D::add_vertex()
 
     if (TEXIMAGE_PARAM.transformation_mode == 3)
     {
-        int16_t texcoords[2];
-        texcoords[0] = current_texcoords[0];
-        texcoords[1] = current_texcoords[1];
-        current_texcoords[0] = ((coords[0] * texture_mtx.m[0][0] + coords[1] * texture_mtx.m[1][0]
-                + coords[2] * texture_mtx.m[2][0]) >> 24) + texcoords[0];
-        current_texcoords[1] = ((coords[0] * texture_mtx.m[0][1] + coords[1] * texture_mtx.m[1][1]
-                + coords[2] * texture_mtx.m[2][1]) >> 24) + texcoords[1];
+        vtx->texcoords[0] = ((coords[0] * texture_mtx.m[0][0] + coords[1] * texture_mtx.m[1][0]
+                + coords[2] * texture_mtx.m[2][0]) >> 24) + raw_texcoords[0];
+        vtx->texcoords[1] = ((coords[0] * texture_mtx.m[0][1] + coords[1] * texture_mtx.m[1][1]
+                + coords[2] * texture_mtx.m[2][1]) >> 24) + raw_texcoords[1];
+    }
+    else
+    {
+        vtx->texcoords[0] = (int16_t)current_texcoords[0];
+        vtx->texcoords[1] = (int16_t)current_texcoords[1];
     }
 
     vtx->colors[0] = ((current_color & 0x1F) << 12) + 0xFFF;
     vtx->colors[1] = (((current_color >> 5) & 0x1F) << 12) + 0xFFF;
     vtx->colors[2] = (((current_color >> 10) & 0x1F) << 12) + 0xFFF;
-    vtx->texcoords[0] = (int16_t)current_texcoords[0];
-    vtx->texcoords[1] = (int16_t)current_texcoords[1];
     vtx->clipped = false;
 
     vertex_list_count++;
@@ -1696,7 +2066,6 @@ void GPU_3D::add_vertex()
             break;
         default:
             printf("\nUnrecognized POLYGON_TYPE %d", POLYGON_TYPE);
-            exit(1);
     }
 }
 
@@ -1721,61 +2090,12 @@ void GPU_3D::end_of_frame()
     {
         //printf("\nSWAP_BUFFERS");
 
-        memcpy(rend_vert, geo_vert, sizeof(Vertex) * geo_vert_count);
-        memcpy(rend_poly, geo_poly, sizeof(Polygon) * geo_poly_count);
-        //printf("\nGeo_poly_count: %d", geo_poly_count);
-        //printf("\nGeo_vert_count: %d", geo_vert_count);
+        swap(rend_vert, geo_vert);
+        swap(rend_poly, geo_poly);
         rend_vert_count = geo_vert_count;
         rend_poly_count = geo_poly_count;
         geo_vert_count = 0;
         geo_poly_count = 0;
-
-        for (int i = 0; i < rend_poly_count; i++)
-        {
-            uint32_t vert_index = rend_poly[i].vert_index;
-            rend_poly[i].top_y = 256;
-            rend_poly[i].bottom_y = 0;
-            for (int j = 0; j < rend_poly[i].vertices; j++)
-            {
-                //printf("\nColor: $%04X", rend_vert[vert_index + j].color & 0xFFFF);
-                int64_t xx = rend_vert[vert_index + j].coords[0],
-                        yy = rend_vert[vert_index + j].coords[1],
-                        ww = rend_vert[vert_index + j].coords[3];
-
-                //printf("\nCoords: (%lld, %lld, %lld, %lld)", xx, yy, zz, ww);
-
-                int32_t final_x, final_y;
-
-                if (ww == 0)
-                {
-                    final_x = 0;
-                    final_y = 0;
-                    printf("\npoly%d ww equals 0??", i);
-                }
-                else
-                {
-                    int width = (viewport.x2 - viewport.x1 + 1) & 0x1FF;
-                    int height = (viewport.y1 - viewport.y2 + 1) & 0xFF;
-                    int64_t screen_x = (((xx + ww) * width) / (ww << 1)) + viewport.x1;
-                    int64_t screen_y = (((-yy + ww) * height) / (ww << 1)) + viewport.y2;
-
-                    final_x = screen_x & 0x1FF;
-                    final_y = screen_y & 0xFF;
-
-                    //printf("\nScreen shit: (%d, %d)", final_x, final_y);
-                }
-
-                if (final_y < rend_poly[i].top_y)
-                    rend_poly[i].top_y = final_y;
-                if (final_y > rend_poly[i].bottom_y)
-                    rend_poly[i].bottom_y = final_y;
-
-                rend_vert[vert_index + j].coords[0] = final_x;
-                rend_vert[vert_index + j].coords[1] = final_y;
-                if (flush_mode & 0x2)
-                    rend_vert[vert_index + j].coords[2] = ww;
-            }
-        }
 
         //Sort polygons by translucency
         int index = 0;
@@ -1850,7 +2170,6 @@ void GPU_3D::MTX_MULT(bool update_vector)
             break;
         default:
             printf("\nUnrecognized MTX_MODE %d in MTX_MULT", MTX_MODE);
-            exit(1);
     }
 
     temp.set(*target);
@@ -1884,11 +2203,16 @@ void GPU_3D::update_clip_mtx()
                 temp_calc = 0;
                 for (int k = 0; k < 4; k++)
                     temp_calc += (int64_t)modelview_mtx.m[i][k] * projection_mtx.m[k][j];
-                clip_mtx.m[i][j] = (int32_t)(temp_calc >> 12);
+                clip_mtx.m[i][j] = temp_calc >> 12;
             }
         }
         clip_dirty = false;
     }
+}
+
+uint32_t* GPU_3D::get_framebuffer()
+{
+    return (uint32_t*)&framebuffer;
 }
 
 uint16_t GPU_3D::get_DISP3DCNT()
@@ -1900,7 +2224,7 @@ uint16_t GPU_3D::get_DISP3DCNT()
     reg |= DISP3DCNT.alpha_blending << 3;
     reg |= DISP3DCNT.anti_aliasing << 4;
     reg |= DISP3DCNT.edge_marking << 5;
-    reg |= DISP3DCNT.fog_color_mode << 6;
+    reg |= DISP3DCNT.fog_alpha_only << 6;
     reg |= DISP3DCNT.fog_enable << 7;
     reg |= DISP3DCNT.fog_depth_shift << 8;
     reg |= DISP3DCNT.color_buffer_underflow << 12;
@@ -1916,7 +2240,9 @@ uint32_t GPU_3D::get_GXSTAT()
     reg |= GXSTAT.box_pos_vec_busy;
     reg |= (GXSTAT.boxtest_result) << 1;
     reg |= (modelview_sp & 0x1F) << 8;
+    reg |= projection_sp << 13;
     reg |= GXSTAT.mtx_stack_busy << 14;
+    reg |= GXSTAT.mtx_overflow << 15;
     reg |= GXFIFO.size() << 16;
     reg |= (GXFIFO.size() < 128) << 25;
     reg |= (GXFIFO.size() == 0) << 26;
@@ -1943,8 +2269,8 @@ uint16_t GPU_3D::read_vec_test(uint32_t address)
 uint32_t GPU_3D::read_clip_mtx(uint32_t address)
 {
     update_clip_mtx();
-    int x = (address - 0x04000640) % 4;
-    int y = (address - 0x04000640) / 4;
+    int x = ((address - 0x04000640) / 4) % 4;
+    int y = ((address - 0x04000640) / 4) / 4;
     return clip_mtx.m[y][x];
 }
 
@@ -1964,7 +2290,7 @@ void GPU_3D::set_DISP3DCNT(uint16_t halfword)
     DISP3DCNT.alpha_blending = halfword & (1 << 3);
     DISP3DCNT.anti_aliasing = halfword & (1 << 4);
     DISP3DCNT.edge_marking = halfword & (1 << 5);
-    DISP3DCNT.fog_color_mode = halfword & (1 << 6);
+    DISP3DCNT.fog_alpha_only = halfword & (1 << 6);
     DISP3DCNT.fog_enable = halfword & (1 << 7);
     DISP3DCNT.fog_depth_shift = (halfword >> 8) & 0xF;
 
@@ -1986,6 +2312,32 @@ void GPU_3D::set_CLEAR_DEPTH(uint32_t word)
     CLEAR_DEPTH = word & 0x7FFF;
 }
 
+void GPU_3D::set_EDGE_COLOR(uint32_t address, uint16_t halfword)
+{
+    int i = (address & 0xF) / 2;
+    printf("\nSet EDGE_COLOR: $%04X ($%02X)", halfword, i);
+    EDGE_COLOR[i] = halfword;
+}
+
+void GPU_3D::set_FOG_COLOR(uint32_t word)
+{
+    printf("\nSet FOG_COLOR: $%08X", word);
+    FOG_COLOR = word;
+}
+
+void GPU_3D::set_FOG_OFFSET(uint16_t halfword)
+{
+    printf("\nSet FOG_OFFSET: $%04X", halfword);
+    FOG_OFFSET = halfword;
+}
+
+void GPU_3D::set_FOG_TABLE(uint32_t address, uint8_t byte)
+{
+    int i = address & 0x1F;
+    printf("\nSet FOG_TABLE: $%02X ($%02X)", byte, i);
+    FOG_TABLE[i] = byte;
+}
+
 void GPU_3D::set_MTX_MODE(uint32_t word)
 {
     printf("\nSet MTX_MODE: $%08X", word);
@@ -1998,7 +2350,16 @@ void GPU_3D::MTX_PUSH()
     switch (MTX_MODE)
     {
         case 0:
-            projection_stack.set(projection_mtx);
+            if (!projection_sp)
+            {
+                projection_stack.set(projection_mtx);
+                projection_sp++;
+            }
+            else
+            {
+                printf("\nMTX_PUSH overflow!");
+                GXSTAT.mtx_overflow = true;
+            }
             break;
         case 1:
         case 2:
@@ -2020,7 +2381,6 @@ void GPU_3D::MTX_PUSH()
             break;
         default:
             printf("\nUnrecognized MTX_MODE %d for MTX_PUSH", MTX_MODE);
-            exit(1);
     }
 }
 
@@ -2036,7 +2396,6 @@ void GPU_3D::MTX_POP(uint32_t word)
             break;
         default:
             printf("\nUnrecognized MTX_MODE %d for MTX_POP", MTX_MODE);
-            exit(1);
     }
 }
 
@@ -2060,7 +2419,6 @@ void GPU_3D::MTX_IDENTITY()
             break;
         default:
             printf("\nUnrecognized MTX_MODE %d in MTX_IDENTITY", MTX_MODE);
-            exit(1);
     }
 }
 
@@ -2128,13 +2486,12 @@ void GPU_3D::NORMAL()
     normal_vector[2] = (int16_t)(((cmd_params[0] >> 20) & 0x3FF) << 6) >> 6;
     if (TEXIMAGE_PARAM.transformation_mode == 2)
     {
-        int32_t texcoords[2];
-        texcoords[0] = current_texcoords[0];
-        texcoords[1] = current_texcoords[1];
-        current_texcoords[0] += (normal_vector[0] * texture_mtx.m[0][0] + normal_vector[1] * texture_mtx.m[1][0]
-                + normal_vector[2] * texture_mtx.m[2][0]) >> 21;
-        current_texcoords[1] += (normal_vector[0] * texture_mtx.m[0][1] + normal_vector[1] * texture_mtx.m[1][1]
-                + normal_vector[2] * texture_mtx.m[2][1]) >> 21;
+        current_texcoords[0] = raw_texcoords[0] +
+                (((int64_t)normal_vector[0] * texture_mtx.m[0][0] + (int64_t)normal_vector[1] * texture_mtx.m[1][0]
+                + (int64_t)normal_vector[2] * texture_mtx.m[2][0]) >> 21);
+        current_texcoords[1] = raw_texcoords[1] +
+                (((int64_t)normal_vector[0] * texture_mtx.m[0][1] + (int64_t)normal_vector[1] * texture_mtx.m[1][1]
+                + (int64_t)normal_vector[2] * texture_mtx.m[2][1]) >> 21);
     }
 
     int32_t normal[3];
@@ -2150,7 +2507,6 @@ void GPU_3D::NORMAL()
     r = emission_color & 0x1F;
     g = (emission_color >> 5) & 0x1F;
     b = (emission_color >> 10) & 0x1F;
-
 
     for (int light = 0; light < 4; light++)
     {
@@ -2280,9 +2636,7 @@ void GPU_3D::VIEWPORT(uint32_t word)
 
 void GPU_3D::BOX_TEST()
 {
-    printf("\nBOX_TEST");
-    GXSTAT.boxtest_result = true;
-    return;
+    GXSTAT.boxtest_result = false;
 
     Vertex cube[8], face[10];
     int16_t coords0[3], coords1[3];
@@ -2293,6 +2647,9 @@ void GPU_3D::BOX_TEST()
     coords1[0] = (int16_t)(cmd_params[1] >> 16);
     coords1[1] = (int16_t)(cmd_params[2] & 0xFFFF);
     coords1[2] = (int16_t)(cmd_params[2] >> 16);
+
+    for (int i = 0; i < 3; i++)
+        coords1[i] += coords0[i];
 
     cube[0].coords[0] = coords0[0]; cube[0].coords[1] = coords0[1]; cube[0].coords[2] = coords0[2];
     cube[1].coords[0] = coords1[0]; cube[1].coords[1] = coords0[1]; cube[1].coords[2] = coords0[2];
@@ -2307,18 +2664,19 @@ void GPU_3D::BOX_TEST()
 
     for (int i = 0; i < 8; i++)
     {
-        int32_t x = cube[i].coords[0];
-        int32_t y = cube[i].coords[1];
-        int32_t z = cube[i].coords[2];
+        int64_t x = (int32_t)cube[i].coords[0];
+        int64_t y = (int32_t)cube[i].coords[1];
+        int64_t z = (int32_t)cube[i].coords[2];
+        int64_t w = 0x1000;
 
         cube[i].coords[0] = (x * clip_mtx.m[0][0] + y * clip_mtx.m[1][0] +
-                z * clip_mtx.m[2][0] + 0x1000 * clip_mtx.m[3][0]) >> 12;
-        cube[i].coords[1] = (x*clip_mtx.m[0][1] + y * clip_mtx.m[1][1] +
-                z * clip_mtx.m[2][1] + 0x1000 * clip_mtx.m[3][1]) >> 12;
-        cube[i].coords[2] = (x*clip_mtx.m[0][2] + y * clip_mtx.m[1][2] +
-                z * clip_mtx.m[2][2] + 0x1000 * clip_mtx.m[3][2]) >> 12;
-        cube[i].coords[3] = (x*clip_mtx.m[0][3] + y * clip_mtx.m[1][3] +
-                z * clip_mtx.m[2][3] + 0x1000 * clip_mtx.m[3][3]) >> 12;
+                z * clip_mtx.m[2][0] + w * clip_mtx.m[3][0]) >> 12;
+        cube[i].coords[1] = (x * clip_mtx.m[0][1] + y * clip_mtx.m[1][1] +
+                z * clip_mtx.m[2][1] + w * clip_mtx.m[3][1]) >> 12;
+        cube[i].coords[2] = (x * clip_mtx.m[0][2] + y * clip_mtx.m[1][2] +
+                z * clip_mtx.m[2][2] + w * clip_mtx.m[3][2]) >> 12;
+        cube[i].coords[3] = (x * clip_mtx.m[0][3] + y * clip_mtx.m[1][3] +
+                z * clip_mtx.m[2][3] + w * clip_mtx.m[3][3]) >> 12;
     }
 
     int vertices;
@@ -2397,6 +2755,7 @@ void GPU_3D::VEC_TEST()
 
 void GPU_3D::set_GXSTAT(uint32_t word)
 {
+    GXSTAT.mtx_overflow &= ~(word & (1 << 15));
     GXSTAT.GXFIFO_irq_stat = (word >> 30) & 0x3;
     check_FIFO_IRQ();
 }

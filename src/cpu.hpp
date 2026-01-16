@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -89,6 +89,7 @@ class ARM_CPU
         void set_cp15(CP15* cp);
         void power_on();
         void direct_boot(uint32_t entry_point);
+        void gba_boot(bool direct);
         void run();
         void execute();
         void jp(uint32_t new_addr, bool change_thumb_state);
@@ -133,6 +134,9 @@ class ARM_CPU
         void add_s32_data(uint32_t address, int cycles);
         void add_n16_data(uint32_t address, int cycles);
         void add_s16_data(uint32_t address, int cycles);
+
+        void update_code_waitstate(uint8_t region, int n32_cycles, int s32_cycles, int n16_cycles, int s16_cycles);
+        void update_data_waitstate(uint8_t region, int n32_cycles, int s32_cycles, int n16_cycles, int s16_cycles);
     
         void add_internal_cycles(int cycles);
         void add_cop_cycles(int cycles);

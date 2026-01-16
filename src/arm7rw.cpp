@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -8,6 +8,9 @@
 
 uint32_t Emulator::arm7_read_word(uint32_t address)
 {
+    //TODO: bad hack.
+    if (gba_mode)
+        return gba_read_word(address);
     if (address >= MAIN_RAM_START && address < SHARED_WRAM_START)
         return *(uint32_t*)&main_RAM[address & MAIN_RAM_MASK];
     if (address >= ARM7_WRAM_START && address < IO_REGS_START)
@@ -32,6 +35,8 @@ uint32_t Emulator::arm7_read_word(uint32_t address)
             return dma.read_len(7) | dma.read_CNT(7) << 16;
         case 0x04000120:
             return 0;
+        case 0x04000130:
+            return KEYINPUT.get();
         case 0x04000180:
             return IPCSYNC_NDS7.read();
         case 0x040001A4:
@@ -64,7 +69,7 @@ uint32_t Emulator::arm7_read_word(uint32_t address)
             return cart.get_output();
     }
     if (address >= 0x04000400 && address < 0x04000500)
-        return 0;
+        return spu.read_channel_word(address);
     if (address < 0x4000)
     {
         if (arm7.get_PC() > 0x4000)
@@ -75,8 +80,8 @@ uint32_t Emulator::arm7_read_word(uint32_t address)
     }
     if (address >= 0x06000000 && address < 0x07000000)
         return gpu.read_ARM7<uint32_t>(address);
-    if (address >= GBA_ROM_START)
-        return 0xFFFFFFFF;
+    if (address >= GBA_ROM_START && address < GBA_RAM_START)
+        return slot2.read<uint32_t>(address);
     printf("\n(7) Unrecognized word read from $%08X", address);
     //exit(2);
     return 0;
@@ -84,6 +89,9 @@ uint32_t Emulator::arm7_read_word(uint32_t address)
 
 uint16_t Emulator::arm7_read_halfword(uint32_t address)
 {
+    //TODO: bad hack.
+    if (gba_mode)
+        return gba_read_halfword(address);
     if (address < 0x4000)
     {
         if (arm7.get_PC() > 0x4000)
@@ -178,21 +186,21 @@ uint16_t Emulator::arm7_read_halfword(uint32_t address)
             return 0;
         case 0x04004700:
             return 0;
+        /*case 0x04808044:
+            return wifi.get_W_RANDOM();
         case 0x0480815C:
             return wifi.get_W_BB_READ();
         case 0x0480815E:
             return wifi.get_W_BB_BUSY();
         case 0x04808180:
-            return wifi.get_W_RF_BUSY();
+            return wifi.get_W_RF_BUSY();*/
     }
-    if (address >= 0x04000400 && address < 0x04000500)
-        return 0;
     if (address >= 0x04800000 && address < 0x04900000)
-        return 0;
+        return wifi.read(address);
     if (address >= 0x06000000 && address < 0x07000000)
         return gpu.read_ARM7<uint16_t>(address);
-    if (address >= GBA_ROM_START)
-        return 0xFFFF;
+    if (address >= GBA_ROM_START && address < GBA_RAM_START)
+        return slot2.read<uint16_t>(address);
     printf("\n(7) Unrecognized halfword read from $%08X", address);
     //exit(2);
     return 0;
@@ -200,6 +208,9 @@ uint16_t Emulator::arm7_read_halfword(uint32_t address)
 
 uint8_t Emulator::arm7_read_byte(uint32_t address)
 {
+    //TODO: bad hack.
+    if (gba_mode)
+        return gba_read_byte(address);
     if (address >= MAIN_RAM_START && address < SHARED_WRAM_START)
         return main_RAM[address & MAIN_RAM_MASK];
     if (address >= ARM7_WRAM_START && address < IO_REGS_START)
@@ -220,6 +231,8 @@ uint8_t Emulator::arm7_read_byte(uint32_t address)
     }
     switch (address)
     {
+        case 0x04000130:
+            return KEYINPUT.get() & 0xFF;
         case 0x04000138:
             return rtc.read();
         case 0x040001C2:
@@ -249,6 +262,8 @@ uint8_t Emulator::arm7_read_byte(uint32_t address)
     }
     if (address >= 0x04000400 && address < 0x04000500)
         return spu.read_channel_byte(address);
+    if (address >= GBA_ROM_START && address < GBA_RAM_START)
+        return slot2.read<uint8_t>(address);
     printf("\n(7) Unrecognized byte read from $%08X", address);
     //exit(2);
     return 0;
@@ -256,10 +271,11 @@ uint8_t Emulator::arm7_read_byte(uint32_t address)
 
 void Emulator::arm7_write_word(uint32_t address, uint32_t word)
 {
-    if (address == 0x027E0014)
+    //TODO: bad hack.
+    if (gba_mode)
     {
-        printf("\n(7) Write of $%08X to $%08X", word, address);
-        //exit(0);
+        gba_write_word(address, word);
+        return;
     }
     if (address >= MAIN_RAM_START && address < SHARED_WRAM_START)
     {
@@ -409,6 +425,12 @@ void Emulator::arm7_write_word(uint32_t address, uint32_t word)
 
 void Emulator::arm7_write_halfword(uint32_t address, uint16_t halfword)
 {
+    //TODO: bad hack.
+    if (gba_mode)
+    {
+        gba_write_halfword(address, halfword);
+        return;
+    }
     if (address >= MAIN_RAM_START && address < SHARED_WRAM_START)
     {
         *(uint16_t*)&main_RAM[address & MAIN_RAM_MASK] = halfword;
@@ -511,7 +533,7 @@ void Emulator::arm7_write_halfword(uint32_t address, uint16_t halfword)
             cart.set_AUXSPICNT(halfword);
             return;
         case 0x040001A2:
-            printf("\nAUXSPIDATA: $%04X", halfword);
+            //printf("\nAUXSPIDATA: $%04X", halfword);
             cart.set_AUXSPIDATA(halfword & 0xFF);
             return;
         case 0x040001B8:
@@ -555,38 +577,34 @@ void Emulator::arm7_write_halfword(uint32_t address, uint16_t halfword)
         case 0x04001080:
             //Some sort of debugging port related to the DS-lite firmware, can be ignored
             return;
-        case 0x04808036:
-            wifi.set_W_POWER_US(halfword);
-            return;
-        case 0x04808158:
-            wifi.set_W_BB_CNT(halfword);
-            return;
-        case 0x0480815A:
-            wifi.set_W_BB_WRITE(halfword);
-            return;
-        case 0x04808160:
-            wifi.set_W_BB_MODE(halfword);
-            return;
-        case 0x04808168:
-            wifi.set_W_BB_POWER(halfword);
-            return;
-        case 0x04808184:
-            wifi.set_W_RF_CNT(halfword);
-            return;
+    }
+    if (address >= 0x04800000 && address < 0x04900000)
+    {
+        wifi.write(address, halfword);
+        return;
     }
     if (address >= 0x04000400 && address < 0x04000500)
     {
         spu.write_channel_halfword(address, halfword);
         return;
     }
-    if (address >= 0x04800000 && address < 0x04900000)
+    if (address >= 0x06000000 && address < 0x07000000)
+    {
+        gpu.write_ARM7<uint16_t>(address, halfword);
         return;
+    }
     printf("\n(7) Unrecognized halfword write of $%04X to $%08X", halfword, address);
     //exit(2);
 }
 
 void Emulator::arm7_write_byte(uint32_t address, uint8_t byte)
 {
+    //TODO: bad hack.
+    if (gba_mode)
+    {
+        gba_write_byte(address, byte);
+        return;
+    }
     if (address >= MAIN_RAM_START && address < SHARED_WRAM_START)
     {
         main_RAM[address & MAIN_RAM_MASK] = byte;
@@ -645,6 +663,9 @@ void Emulator::arm7_write_byte(uint32_t address, uint8_t byte)
         case 0x04000301:
             switch (byte)
             {
+                case 0x40:
+                    start_gba_mode(true);
+                    break;
                 case 0x80:
                     arm7.halt();
                     /*printf("\nHalted ARM7");
@@ -652,8 +673,7 @@ void Emulator::arm7_write_byte(uint32_t address, uint8_t byte)
                     printf("\nIF: $%08X", int9_reg.IF);*/
                     break;
                 default:
-                    printf("\nUnrecognized HALTCNT state $%02X for ARM7", byte);
-                    exit(1);
+                    throw "Unrecognized HALTCNT state for ARM7";
             }
             return;
         case 0x04000500:

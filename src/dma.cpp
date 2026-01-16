@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -51,6 +51,15 @@ void NDS_DMA::power_on()
     }
 }
 
+void NDS_DMA::activate_DMA(int index)
+{
+    //TODO: add proper scheduling infrastructure
+    active_DMAs |= (1 << index);
+    SchedulerEvent event;
+    event.id = index;
+    handle_event(event);
+}
+
 void NDS_DMA::handle_event(SchedulerEvent &event)
 {
     event.processing = false;
@@ -68,21 +77,12 @@ void NDS_DMA::handle_event(SchedulerEvent &event)
                     e->request_interrupt7(static_cast<INTERRUPT>(4 + active_DMA->index));
             }
             active_DMA->internal_len = 0;
+            active_DMAs &= ~(1 << event.id);
+            //Reload dest
+            if (active_DMA->CNT.dest_control == 3)
+                active_DMA->internal_dest = active_DMA->destination;
             if (!active_DMA->CNT.repeat)
-            {
                 active_DMA->CNT.enabled = false;
-                active_DMAs &= ~(1 << event.id);
-            }
-            else
-            {
-                //Reload dest
-                if (active_DMA->CNT.dest_control == 3)
-                    active_DMA->internal_dest = active_DMA->destination;
-                if (active_DMA->CNT.timing != 0)
-                    active_DMAs &= ~(1 << event.id);
-                else
-                    e->add_DMA_event(event.id, active_DMA->length);
-            }
             return;
         }
 
@@ -131,7 +131,6 @@ void NDS_DMA::handle_event(SchedulerEvent &event)
                 break;
             default:
                 printf("\nUnrecognized DMA dest control %d", active_DMA->CNT.dest_control);
-                exit(1);
         }
         switch (active_DMA->CNT.source_control)
         {
@@ -146,7 +145,6 @@ void NDS_DMA::handle_event(SchedulerEvent &event)
                 break;
             default:
                 printf("\nUnrecognized DMA source control %d", active_DMA->CNT.source_control);
-                exit(1);
         }
         if (active_DMA->is_arm9 && active_DMA->CNT.timing == 7 && active_DMA->internal_len >= 112)
         {
@@ -189,7 +187,7 @@ void NDS_DMA::write_dest(int index, uint32_t dest)
     dmas[index].destination = dest;
 }
 
-void NDS_DMA::write_len(int index, uint16_t len)
+void NDS_DMA::write_len(int index, uint32_t len)
 {
     if (dmas[index].is_arm9)
     {
@@ -232,8 +230,7 @@ void NDS_DMA::write_CNT(int index, uint16_t CNT)
         if (dmas[index].CNT.timing == 0)
         {
             //printf("\nRunning immediately");
-            active_DMAs |= (1 << index);
-            e->add_DMA_event(index, 0);
+            activate_DMA(index);
         }
         else if (dmas[index].CNT.timing == 7)
         {
@@ -244,7 +241,7 @@ void NDS_DMA::write_CNT(int index, uint16_t CNT)
 
 void NDS_DMA::write_len_CNT(int index, uint32_t word)
 {
-    write_len(index, word & 0xFFFF);
+    write_len(index, word & 0x1FFFFF);
     write_CNT(index, word >> 16);
 }
 
@@ -254,8 +251,7 @@ void NDS_DMA::HBLANK_request()
     {
         if (dmas[i].CNT.enabled && dmas[i].CNT.timing == 2 && !active_DMAs)
         {
-            active_DMAs |= (1 << i);
-            e->add_DMA_event(i, 0);
+            activate_DMA(i);
             break;
         }
     }
@@ -270,8 +266,7 @@ void NDS_DMA::gamecart_request()
         {
             if (dmas[i].CNT.enabled && dmas[i].CNT.timing == 4)
             {
-                active_DMAs |= (1 << i);
-                e->add_DMA_event(i, 0);
+                activate_DMA(i);
                 break;
             }
         }
@@ -282,8 +277,7 @@ void NDS_DMA::gamecart_request()
         {
             if (dmas[i].CNT.enabled && dmas[i].CNT.timing == 5)
             {
-                active_DMAs |= (1 << i);
-                e->add_DMA_event(i, 0);
+                activate_DMA(i);
                 break;
             }
         }
@@ -296,8 +290,7 @@ void NDS_DMA::GXFIFO_request()
     {
         if (dmas[i].CNT.enabled && dmas[i].CNT.timing == 7)
         {
-            active_DMAs |= (1 << i);
-            e->add_DMA_event(i, 0);
+            activate_DMA(i);
             break;
         }
     }

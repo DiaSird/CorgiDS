@@ -1,11 +1,15 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
 
 #include <cstdio>
+#include <iomanip>
+#include <sstream>
 #include "bios.hpp"
+
+using namespace std;
 
 BIOS::BIOS()
 {
@@ -44,7 +48,7 @@ void BIOS::cpu_set(ARM_CPU &cpu)
     if (cpu.get_id())
     {
         //Reject reads and writes to BIOS area
-        if (source < 0x4000 && dest < 0x4000)
+        if (source < 0x4000 || dest < 0x4000)
             return;
     }
 
@@ -110,9 +114,8 @@ int BIOS::SWI7(ARM_CPU &arm7)
             get_CRC16(arm7);
             break;
         default:
-            printf("\nUnrecognized HLE SWI7 $%02X", opcode);
-            exit(1);
-            return 0;
+            printf("\nUnrecognized ARM9 SWI $%02X", opcode);
+            throw "Unrecognized ARM7 SWI";
     }
     return 1;
 }
@@ -135,9 +138,8 @@ int BIOS::SWI9(ARM_CPU &arm9)
             get_CRC16(arm9);
             break;
         default:
-            printf("Unrecognized HLE SWI9 $%02X", opcode);
-            exit(1);
-            return 0;
+            printf("\nUnrecognized ARM9 SWI $%02X", opcode);
+            throw "Unrecognized ARM9 SWI";
     }
     return 1;
 }

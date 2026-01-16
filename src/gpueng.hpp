@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -81,12 +81,16 @@ struct BLDCNT_REG
 };
 
 class GPU;
+class GPU_3D;
 
 class GPU_2D_Engine
 {
     private:
         GPU* gpu;
+        GPU_3D* eng_3D;
         uint32_t framebuffer[PIXELS_PER_LINE * SCANLINES], front_framebuffer[PIXELS_PER_LINE * SCANLINES];
+        uint32_t second_layer[PIXELS_PER_LINE];
+        uint8_t layer_sources[PIXELS_PER_LINE * 2];
         uint8_t final_bg_priority[PIXELS_PER_LINE * 2];
         uint32_t sprite_scanline[PIXELS_PER_LINE * 2];
         uint8_t window_mask[PIXELS_PER_LINE];
@@ -124,20 +128,30 @@ class GPU_2D_Engine
 
         uint16_t MASTER_BRIGHT;
 
+        void draw_3D();
         void draw_ext_text(int index);
+        void draw_pixel(int x, int y, uint16_t color, int source);
         void get_window_mask();
         void handle_BLDCNT_effects();
+
+        void gba_draw_txt(int index);
+        void gba_draw_mode2(int index);
+        void gba_draw_sprites();
+        void gba_draw_pixel(int x, int y, uint16_t color, int source);
+        void gba_handle_BLDCNT();
     public:
         GPU_2D_Engine(GPU* gpu, bool engine_A);
         void draw_backdrop();
         void draw_bg_txt(int index);
+        void draw_bg_aff(int index);
         void draw_bg_ext(int index);
-        void draw_sprites();
-        void draw_rotscale_sprite(uint16_t* attributes);
+        void draw_sprites(bool objwin);
+        void draw_rotscale_sprite(uint16_t* attributes, bool objwin);
         void draw_scanline();
 
         void get_framebuffer(uint32_t* buffer);
         void set_framebuffer(uint32_t* buffer);
+        void clear_buffer();
 
         void VBLANK_start();
 
@@ -146,6 +160,8 @@ class GPU_2D_Engine
 
         uint16_t get_BGHOFS(int index);
         uint16_t get_BGVOFS(int index);
+
+        uint32_t get_BG2X();
 
         uint16_t get_WIN0V();
         uint16_t get_WIN1V();
@@ -158,6 +174,8 @@ class GPU_2D_Engine
 
         uint16_t get_MASTER_BRIGHT();
         uint32_t get_DISPCAPCNT();
+
+        void set_eng_3D(GPU_3D* eng_3D);
 
         void set_DISPCNT_lo(uint16_t halfword);
         void set_DISPCNT(uint32_t word);
@@ -190,6 +208,9 @@ class GPU_2D_Engine
 
         void set_MASTER_BRIGHT(uint16_t halfword);
         void set_DISPCAPCNT(uint32_t word);
+
+        void gba_draw_scanline();
+        void gba_set_DISPCNT(uint16_t halfword);
 };
 
 #endif // GPUENG_HPP

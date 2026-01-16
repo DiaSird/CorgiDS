@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -12,11 +12,13 @@
 
 GPU::GPU(Emulator* e) : e(e), eng_A(this, true), eng_B(this, false), eng_3D(e, this), frame_complete(false), cycles(0)
 {
-
+    eng_A.set_eng_3D(&eng_3D);
 }
 
 void GPU::power_on()
 {
+    eng_A.clear_buffer();
+    eng_B.clear_buffer();
     eng_3D.power_on();
     cycles = 0;
     frame_complete = false;
@@ -134,11 +136,6 @@ void GPU::handle_event(SchedulerEvent &event)
     }
 }
 
-void GPU::draw_3D_scanline(uint32_t* framebuffer, uint8_t bg_priorities[256], uint8_t bg0_priority)
-{
-    eng_3D.render_scanline(framebuffer, bg_priorities, bg0_priority);
-}
-
 void GPU::draw_scanline()
 {
     /*if (!POWCNT1.lcd_enable)
@@ -217,8 +214,6 @@ uint16_t GPU::read_extpal_bgb(uint32_t address)
     {
         if (ADDR_IN_RANGE(0, VRAM_H_SIZE) && VRAMCNT_H.MST == 2)
             reg |= *(uint16_t*)&VRAM_H[address & VRAM_H_MASK];
-        else
-            exit(1);
     }
     return reg;
 }
@@ -272,14 +267,14 @@ void GPU::write_bga(uint32_t address, uint16_t halfword)
         if (VRAMCNT_E.enabled)
             *(uint16_t*)&VRAM_E[address & VRAM_E_MASK] = halfword;
     }
-    uint32_t f_offset = (VRAMCNT_F.offset & 0x1) * 0x4000 + (VRAMCNT_F.offset & 0x2) * 0x10000;
-    if (ADDR_IN_RANGE(VRAM_BGA_START, f_offset) && VRAMCNT_F.MST == 1)
+    uint32_t f_offset = (VRAMCNT_F.offset & 0x1) * 0x4000 + (VRAMCNT_F.offset & 0x2) * 0x8000;
+    if (ADDR_IN_RANGE(VRAM_BGA_START + f_offset, VRAM_F_SIZE) && VRAMCNT_F.MST == 1)
     {
         if (VRAMCNT_F.enabled)
             *(uint16_t*)&VRAM_F[address & VRAM_F_MASK] = halfword;
     }
-    uint32_t g_offset = (VRAMCNT_G.offset & 0x1) * 0x4000 + (VRAMCNT_G.offset & 0x2) * 0x10000;
-    if (ADDR_IN_RANGE(VRAM_BGA_START, g_offset) && VRAMCNT_G.MST == 1)
+    uint32_t g_offset = (VRAMCNT_G.offset & 0x1) * 0x4000 + (VRAMCNT_G.offset & 0x2) * 0x8000;
+    if (ADDR_IN_RANGE(VRAM_BGA_START + g_offset, VRAM_G_SIZE) && VRAMCNT_G.MST == 1)
     {
         if (VRAMCNT_G.enabled)
             *(uint16_t*)&VRAM_G[address & VRAM_G_MASK] = halfword;
@@ -324,14 +319,14 @@ void GPU::write_obja(uint32_t address, uint16_t halfword)
         if (VRAMCNT_E.enabled)
             *(uint16_t*)&VRAM_E[address & VRAM_E_MASK] = halfword;
     }
-    uint32_t f_offset = (VRAMCNT_F.offset & 0x1) * 0x4000 + (VRAMCNT_F.offset & 0x2) * 0x10000;
-    if (ADDR_IN_RANGE(VRAM_OBJA_START, f_offset) && VRAMCNT_F.MST == 2)
+    uint32_t f_offset = (VRAMCNT_F.offset & 0x1) * 0x4000 + (VRAMCNT_F.offset & 0x2) * 0x8000;
+    if (ADDR_IN_RANGE(VRAM_OBJA_START + f_offset, VRAM_F_SIZE) && VRAMCNT_F.MST == 2)
     {
         if (VRAMCNT_F.enabled)
             *(uint16_t*)&VRAM_F[address & VRAM_F_MASK] = halfword;
     }
-    uint32_t g_offset = (VRAMCNT_G.offset & 0x1) * 0x4000 + (VRAMCNT_G.offset & 0x2) * 0x10000;
-    if (ADDR_IN_RANGE(VRAM_OBJA_START, g_offset) && VRAMCNT_G.MST == 2)
+    uint32_t g_offset = (VRAMCNT_G.offset & 0x1) * 0x4000 + (VRAMCNT_G.offset & 0x2) * 0x8000;
+    if (ADDR_IN_RANGE(VRAM_OBJA_START + g_offset, VRAM_G_SIZE) && VRAMCNT_G.MST == 2)
     {
         if (VRAMCNT_G.enabled)
             *(uint16_t*)&VRAM_G[address & VRAM_G_MASK] = halfword;
@@ -499,6 +494,11 @@ uint16_t GPU::get_BGVOFS_B(int index)
     return eng_B.get_BGVOFS(index);
 }
 
+uint32_t GPU::get_BG2X_A()
+{
+    return eng_A.get_BG2X();
+}
+
 uint16_t GPU::get_WIN0V_A()
 {
     return eng_A.get_WIN0V();
@@ -603,6 +603,24 @@ uint8_t GPU::get_VRAMCNT_B()
     reg |= VRAMCNT_B.MST;
     reg |= VRAMCNT_B.offset << 3;
     reg |= VRAMCNT_B.enabled << 7;
+    return reg;
+}
+
+uint8_t GPU::get_VRAMCNT_C()
+{
+    uint8_t reg = 0;
+    reg |= VRAMCNT_C.MST;
+    reg |= VRAMCNT_C.offset << 3;
+    reg |= VRAMCNT_C.enabled << 7;
+    return reg;
+}
+
+uint8_t GPU::get_VRAMCNT_D()
+{
+    uint8_t reg = 0;
+    reg |= VRAMCNT_D.MST;
+    reg |= VRAMCNT_D.offset << 3;
+    reg |= VRAMCNT_D.enabled << 7;
     return reg;
 }
 
@@ -989,6 +1007,26 @@ void GPU::set_CLEAR_COLOR(uint32_t word)
 void GPU::set_CLEAR_DEPTH(uint32_t word)
 {
     eng_3D.set_CLEAR_DEPTH(word);
+}
+
+void GPU::set_EDGE_COLOR(uint32_t address, uint16_t halfword)
+{
+    eng_3D.set_EDGE_COLOR(address, halfword);
+}
+
+void GPU::set_FOG_COLOR(uint32_t word)
+{
+    eng_3D.set_FOG_COLOR(word);
+}
+
+void GPU::set_FOG_OFFSET(uint16_t halfword)
+{
+    eng_3D.set_FOG_OFFSET(halfword);
+}
+
+void GPU::set_FOG_TABLE(uint32_t address, uint8_t byte)
+{
+    eng_3D.set_FOG_TABLE(address, byte);
 }
 
 void GPU::set_MTX_MODE(uint32_t word)

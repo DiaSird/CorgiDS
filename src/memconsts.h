@@ -1,5 +1,5 @@
 /*
-    CorgiDS Copyright PSISP 2017
+    CorgiDS Copyright PSISP 2017-2018
     Licensed under the GPLv3
     See LICENSE.txt for details
 */
@@ -8,6 +8,7 @@
 #define memconsts_h
 
 #define ADDR_IN_RANGE(x, s) address >= x && address < x + s
+#define MASKED_ADDR(x, s, m) address >= x && ((address + x) & m) < s
 
 //Memory addresses
 #define MAIN_RAM_START          0x02000000
@@ -48,6 +49,7 @@
 #define VRAM_I_SIZE             1024 * 16
 #define BIOS9_SIZE              1024 * 4
 #define BIOS7_SIZE              1024 * 16
+#define BIOS_GBA_SIZE           1024 * 16
 
 //Masks
 #define ITCM_MASK               0x7FFF
@@ -66,6 +68,8 @@
 
 //Other constants
 #define PIXELS_PER_LINE         256
+#define GBA_PIXELS_PER_LINE     240
 #define SCANLINES               192
+#define GBA_SCANLINES           160
 
 #endif
